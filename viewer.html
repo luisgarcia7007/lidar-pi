@@ -70,7 +70,7 @@ scene.add(voxelPoints);
 /* =====================================================
    VOXEL MAP STATE  (⭐ THIS IS THE KEY PART ⭐)
    ===================================================== */
-const SCALE = 0.001;        // mm → meters (adjust if needed)
+const DEFAULT_SCALE = 1.0;  // assume meters unless server provides `scale`
 const MIN_RANGE = 0.3;
 const MAX_RANGE = 30.0;
 
@@ -88,10 +88,17 @@ function voxelKey(ix, iy, iz) {
 /* =====================================================
    WEBSOCKET
    ===================================================== */
-const socket = new WebSocket("ws://192.168.1.205:8765");
+// Prefer connecting back to the same host serving this page.
+// If opened as file:// (no hostname), prompt for the Pi/server IP.
+const wsPort = 8765;
+const wsHost =
+  window.location.hostname ||
+  window.prompt("LiDAR server IP/hostname (WebSocket)", "raspberrypi.local") ||
+  "localhost";
+const socket = new WebSocket(`ws://${wsHost}:${wsPort}`);
 
 socket.onopen = () => {
-  console.log("WebSocket connected");
+  console.log("WebSocket connected:", socket.url);
 };
 
 socket.onerror = (e) => {
@@ -110,6 +117,10 @@ socket.onmessage = (event) => {
   if (!Array.isArray(pts) || pts.length === 0) return;
 
   /* -------- Insert points into voxel grid -------- */
+  // If the server provides a scale (e.g., mm->m = 0.001), use it.
+  // Otherwise assume points are already in meters.
+  const scale = Number.isFinite(data.scale) ? data.scale : DEFAULT_SCALE;
+
   for (let i = 0; i < pts.length; i++) {
     let x = pts[i][0];
     let y = pts[i][1];
@@ -117,9 +128,9 @@ socket.onmessage = (event) => {
 
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
 
-    x *= SCALE;
-    y *= SCALE;
-    z *= SCALE;
+    x *= scale;
+    y *= scale;
+    z *= scale;
 
     const r = Math.sqrt(x*x + y*y + z*z);
     if (r < MIN_RANGE || r > MAX_RANGE) continue;

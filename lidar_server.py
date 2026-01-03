@@ -7,7 +7,8 @@ PORT = 8765
 
 def get_lidar_points():
     # DEMO DATA: replace later with real LiDAR
-    pts = np.random.uniform(-5, 5, size=(3000, 3))
+    # Generate millimeters so the viewer's mm->m scaling works by default.
+    pts = np.random.uniform(-5000, 5000, size=(3000, 3))
     return pts.tolist()
 
 async def lidar_stream(websocket):
@@ -18,7 +19,9 @@ async def lidar_stream(websocket):
             points = get_lidar_points()
 
             msg = json.dumps({
-                "points": points
+                "points": points,
+                # mm -> meters
+                "scale": 0.001
             })
 
             await websocket.send(msg)
