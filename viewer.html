@@ -11,10 +11,27 @@
     overflow: hidden;
     background: black;
   }
+  #hud {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif;
+    font-size: 12px;
+    line-height: 1.35;
+    color: rgba(255,255,255,0.9);
+    background: rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 8px 10px;
+    border-radius: 6px;
+    user-select: none;
+  }
 </style>
 </head>
 
 <body>
+
+<div id="hud"></div>
 
 <!-- Import map required for OrbitControls -->
 <script type="importmap">
@@ -88,7 +105,7 @@ const MAX_VOXELS = 800_000;
 // - "intensity": uses reflectivity when provided by server
 // - "height": colors by average voxel height (best for interpretability)
 // - "range": colors by average voxel range
-const COLOR_MODE = "intensity";
+let COLOR_MODE = "height"; // press 1/2/3 to switch
 const HEIGHT_MIN = -2.0;   // meters (used when COLOR_MODE="height")
 const HEIGHT_MAX =  3.0;   // meters (used when COLOR_MODE="height")
 
@@ -133,6 +150,24 @@ socket.onopen = () => {
 socket.onerror = (e) => {
   console.error("WebSocket error", e);
 };
+
+// Simple on-screen help + color mode toggle
+const hudEl = document.getElementById('hud');
+function updateHud() {
+  if (!hudEl) return;
+  hudEl.textContent =
+    `Color: ${COLOR_MODE} (1=height, 2=range, 3=intensity)\n` +
+    `Range gate: ${MIN_RANGE}..${MAX_RANGE} m\n` +
+    `Window: ${(WINDOW_MS/1000).toFixed(0)} s`;
+}
+updateHud();
+window.addEventListener('keydown', (e) => {
+  if (e.key === '1') COLOR_MODE = 'height';
+  else if (e.key === '2') COLOR_MODE = 'range';
+  else if (e.key === '3') COLOR_MODE = 'intensity';
+  else return;
+  updateHud();
+});
 
 socket.onmessage = (event) => {
   let data;
