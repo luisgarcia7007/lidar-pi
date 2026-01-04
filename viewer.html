@@ -80,6 +80,14 @@ const MIN_HITS = 1;        // show everything; color encodes density
 const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
 const MAX_VOXELS = 400_000;
 
+// Coloring
+// - "intensity": uses reflectivity when provided by server
+// - "height": colors by average voxel height (best for interpretability)
+// - "range": colors by average voxel range
+const COLOR_MODE = "height";
+const HEIGHT_MIN = -1.0;   // meters
+const HEIGHT_MAX =  2.0;   // meters
+
 // Rolling time window for "live" map (avoid accumulating forever)
 const WINDOW_MS = 2000;    // keep last 2 seconds
 const BUCKET_MS = 100;     // time bucket size (20 buckets for 2s)
@@ -88,11 +96,15 @@ const voxelMap = new Map();
 const voxelPositions = [];
 const voxelColors = [];
 const voxelIntensitySum = new Map();
+const voxelHeightSum = new Map();
+const voxelRangeSum = new Map();
 
 // bucketId -> Map(voxelKey -> count)
 const bucketMaps = new Map();
 const bucketOrder = [];
 const bucketIntensityMaps = new Map(); // bucketId -> Map(voxelKey -> intensitySum)
+const bucketHeightMaps = new Map();    // bucketId -> Map(voxelKey -> heightSum)
+const bucketRangeMaps = new Map();     // bucketId -> Map(voxelKey -> rangeSum)
 
 function voxelKey(ix, iy, iz) {
   return ix + ',' + iy + ',' + iz;
@@ -143,6 +155,8 @@ socket.onmessage = (event) => {
     bucketMaps.set(bucketId, bucket);
     bucketOrder.push(bucketId);
     bucketIntensityMaps.set(bucketId, new Map());
+    bucketHeightMaps.set(bucketId, new Map());
+    bucketRangeMaps.set(bucketId, new Map());
 
     // Evict buckets older than WINDOW_MS and subtract their counts
     const keepBuckets = Math.ceil(WINDOW_MS / BUCKET_MS);
@@ -151,8 +165,12 @@ socket.onmessage = (event) => {
       const oldId = bucketOrder.shift();
       const oldBucket = bucketMaps.get(oldId);
       const oldBucketIntensity = bucketIntensityMaps.get(oldId);
+      const oldBucketHeight = bucketHeightMaps.get(oldId);
+      const oldBucketRange = bucketRangeMaps.get(oldId);
       bucketMaps.delete(oldId);
       bucketIntensityMaps.delete(oldId);
+      bucketHeightMaps.delete(oldId);
+      bucketRangeMaps.delete(oldId);
       if (!oldBucket) continue;
 
       for (const [key, cnt] of oldBucket) {
@@ -168,9 +186,27 @@ socket.onmessage = (event) => {
           else voxelIntensitySum.delete(key);
         }
       }
+
+      if (oldBucketHeight) {
+        for (const [key, hsum] of oldBucketHeight) {
+          const nextH = (voxelHeightSum.get(key) || 0) - hsum;
+          if (nextH !== 0) voxelHeightSum.set(key, nextH);
+          else voxelHeightSum.delete(key);
+        }
+      }
+
+      if (oldBucketRange) {
+        for (const [key, rsum] of oldBucketRange) {
+          const nextR = (voxelRangeSum.get(key) || 0) - rsum;
+          if (nextR !== 0) voxelRangeSum.set(key, nextR);
+          else voxelRangeSum.delete(key);
+        }
+      }
     }
   }
   const bucketIntensity = bucketIntensityMaps.get(bucketId);
+  const bucketHeight = bucketHeightMaps.get(bucketId);
+  const bucketRange = bucketRangeMaps.get(bucketId);
 
   for (let i = 0; i < pts.length; i++) {
     let x = pts[i][0];
@@ -200,6 +236,12 @@ socket.onmessage = (event) => {
     voxelMap.set(key, (voxelMap.get(key) || 0) + 1);
     bucket.set(key, (bucket.get(key) || 0) + 1);
 
+    // Track height/range statistics for coloring
+    voxelHeightSum.set(key, (voxelHeightSum.get(key) || 0) + wy);
+    voxelRangeSum.set(key, (voxelRangeSum.get(key) || 0) + r);
+    if (bucketHeight) bucketHeight.set(key, (bucketHeight.get(key) || 0) + wy);
+    if (bucketRange) bucketRange.set(key, (bucketRange.get(key) || 0) + r);
+
     if (intensity !== null) {
       voxelIntensitySum.set(key, (voxelIntensitySum.get(key) || 0) + intensity);
       if (bucketIntensity) {
@@ -212,9 +254,13 @@ socket.onmessage = (event) => {
   if (voxelMap.size > MAX_VOXELS) {
     voxelMap.clear();
     voxelIntensitySum.clear();
+    voxelHeightSum.clear();
+    voxelRangeSum.clear();
     bucketMaps.clear();
     bucketOrder.length = 0;
     bucketIntensityMaps.clear();
+    bucketHeightMaps.clear();
+    bucketRangeMaps.clear();
     console.warn("Voxel map reset (size limit reached)");
   }
 
@@ -232,24 +278,34 @@ socket.onmessage = (event) => {
       iz * VOXEL_SIZE
     );
 
-    // Prefer coloring by intensity (if present); fall back to density heuristic.
-    const isum = voxelIntensitySum.get(key);
-    if (Number.isFinite(isum) && isum > 0) {
-      const avgI = isum / count;          // 0..255-ish
-      const tI = Math.min(1, Math.max(0, avgI / 255.0));
-      // low intensity => blue, high intensity => red
-      voxelColors.push(
-        0.1 + 0.9 * tI,   // r
-        0.2 + 0.5 * (1 - tI), // g
-        1.0 - 0.9 * tI    // b
-      );
+    if (COLOR_MODE === "intensity") {
+      const isum = voxelIntensitySum.get(key);
+      if (Number.isFinite(isum) && isum > 0) {
+        const avgI = isum / count; // 0..255-ish
+        const tI = Math.min(1, Math.max(0, avgI / 255.0));
+        // low intensity => blue, high intensity => red
+        voxelColors.push(0.1 + 0.9 * tI, 0.2 + 0.5 * (1 - tI), 1.0 - 0.9 * tI);
+      } else {
+        // fall back to density if no intensity exists
+        const t = Math.min(1, Math.max(0, (count - 1) / (OBJECT_HITS - 1)));
+        voxelColors.push(0.1 + 0.9 * t, 0.6 - 0.4 * t, 1.0 - 0.9 * t);
+      }
+    } else if (COLOR_MODE === "range") {
+      const rsum = voxelRangeSum.get(key);
+      const avgR = Number.isFinite(rsum) ? (rsum / count) : 0;
+      const tR = Math.min(1, Math.max(0, avgR / MAX_RANGE));
+      // near => green, far => purple
+      voxelColors.push(0.4 + 0.6 * tR, 0.9 - 0.7 * tR, 0.2 + 0.8 * tR);
     } else {
-      const t = Math.min(1, Math.max(0, (count - 1) / (OBJECT_HITS - 1)));
-      voxelColors.push(
-        0.1 + 0.9 * t,     // r
-        0.6 - 0.4 * t,     // g
-        1.0 - 0.9 * t      // b
-      );
+      // "height"
+      const hsum = voxelHeightSum.get(key);
+      const avgH = Number.isFinite(hsum) ? (hsum / count) : 0;
+      const tH = Math.min(1, Math.max(0, (avgH - HEIGHT_MIN) / (HEIGHT_MAX - HEIGHT_MIN)));
+      // low => blue, mid => green, high => red-ish
+      const rC = Math.min(1, Math.max(0, (tH - 0.5) * 2));
+      const bC = Math.min(1, Math.max(0, (0.5 - tH) * 2));
+      const gC = 1.0 - Math.abs(tH - 0.5) * 2;
+      voxelColors.push(rC, gC, bC);
     }
   }
 
