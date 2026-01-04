@@ -54,7 +54,10 @@ controls.enableDamping = true;
    HELPERS
    ===================================================== */
 scene.add(new THREE.AxesHelper(50));
-scene.add(new THREE.GridHelper(200, 40));
+// Horizontal reference plane at LiDAR height (world y=0).
+// In this viewer, the LiDAR is at the origin, so y=0 is the LiDAR height.
+const groundGrid = new THREE.GridHelper(60, 60);
+scene.add(groundGrid);
 
 /* =====================================================
    POINT CLOUD (VOXEL OUTPUT)
@@ -72,11 +75,11 @@ scene.add(voxelPoints);
    VOXEL MAP STATE  (⭐ THIS IS THE KEY PART ⭐)
    ===================================================== */
 const DEFAULT_SCALE = 1.0;  // assume meters unless server provides `scale`
-const MIN_RANGE = 0.3;
-const MAX_RANGE = 80.0;     // expand scanned volume
+const MIN_RANGE = 0.1;
+const MAX_RANGE = 30.0;     // Unitree L2 max range (per user)
 
 const VOXEL_SIZE = 0.25;   // meters (bigger = fewer points, faster)
-const MIN_HITS = 1;        // show everything; color encodes density
+const MIN_HITS = 1;        // show all returns (no-return points aren't transmitted)
 const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
 const MAX_VOXELS = 400_000;
 
@@ -84,13 +87,13 @@ const MAX_VOXELS = 400_000;
 // - "intensity": uses reflectivity when provided by server
 // - "height": colors by average voxel height (best for interpretability)
 // - "range": colors by average voxel range
-const COLOR_MODE = "height";
-const HEIGHT_MIN = -1.0;   // meters
-const HEIGHT_MAX =  2.0;   // meters
+const COLOR_MODE = "intensity";
+const HEIGHT_MIN = -2.0;   // meters (used when COLOR_MODE="height")
+const HEIGHT_MAX =  3.0;   // meters (used when COLOR_MODE="height")
 
 // Rolling time window for "live" map (avoid accumulating forever)
-const WINDOW_MS = 2000;    // keep last 2 seconds
-const BUCKET_MS = 100;     // time bucket size (20 buckets for 2s)
+const WINDOW_MS = 30000;   // keep last 30 seconds
+const BUCKET_MS = 250;     // time bucket size (120 buckets for 30s)
 
 const voxelMap = new Map();
 const voxelPositions = [];
