@@ -80,9 +80,17 @@ const MIN_HITS = 1;        // show everything; color encodes density
 const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
 const MAX_VOXELS = 400_000;
 
+// Rolling time window for "live" map (avoid accumulating forever)
+const WINDOW_MS = 2000;    // keep last 2 seconds
+const BUCKET_MS = 100;     // time bucket size (20 buckets for 2s)
+
 const voxelMap = new Map();
 const voxelPositions = [];
 const voxelColors = [];
+
+// bucketId -> Map(voxelKey -> count)
+const bucketMaps = new Map();
+const bucketOrder = [];
 
 function voxelKey(ix, iy, iz) {
   return ix + ',' + iy + ',' + iz;
@@ -124,6 +132,32 @@ socket.onmessage = (event) => {
   // Otherwise assume points are already in meters.
   const scale = Number.isFinite(data.scale) ? data.scale : DEFAULT_SCALE;
 
+  // Rolling window bucket for this frame
+  const nowMs = performance.now();
+  const bucketId = Math.floor(nowMs / BUCKET_MS);
+  let bucket = bucketMaps.get(bucketId);
+  if (!bucket) {
+    bucket = new Map();
+    bucketMaps.set(bucketId, bucket);
+    bucketOrder.push(bucketId);
+
+    // Evict buckets older than WINDOW_MS and subtract their counts
+    const keepBuckets = Math.ceil(WINDOW_MS / BUCKET_MS);
+    const minBucketId = bucketId - keepBuckets + 1;
+    while (bucketOrder.length && bucketOrder[0] < minBucketId) {
+      const oldId = bucketOrder.shift();
+      const oldBucket = bucketMaps.get(oldId);
+      bucketMaps.delete(oldId);
+      if (!oldBucket) continue;
+
+      for (const [key, cnt] of oldBucket) {
+        const next = (voxelMap.get(key) || 0) - cnt;
+        if (next > 0) voxelMap.set(key, next);
+        else voxelMap.delete(key);
+      }
+    }
+  }
+
   for (let i = 0; i < pts.length; i++) {
     let x = pts[i][0];
     let y = pts[i][1];
@@ -149,11 +183,14 @@ socket.onmessage = (event) => {
 
     const key = voxelKey(ix, iy, iz);
     voxelMap.set(key, (voxelMap.get(key) || 0) + 1);
+    bucket.set(key, (bucket.get(key) || 0) + 1);
   }
 
   // ---- Safety cap ----
   if (voxelMap.size > MAX_VOXELS) {
     voxelMap.clear();
+    bucketMaps.clear();
+    bucketOrder.length = 0;
     console.warn("Voxel map reset (size limit reached)");
   }
 
