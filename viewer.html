@@ -87,10 +87,12 @@ const BUCKET_MS = 100;     // time bucket size (20 buckets for 2s)
 const voxelMap = new Map();
 const voxelPositions = [];
 const voxelColors = [];
+const voxelIntensitySum = new Map();
 
 // bucketId -> Map(voxelKey -> count)
 const bucketMaps = new Map();
 const bucketOrder = [];
+const bucketIntensityMaps = new Map(); // bucketId -> Map(voxelKey -> intensitySum)
 
 function voxelKey(ix, iy, iz) {
   return ix + ',' + iy + ',' + iz;
@@ -140,6 +142,7 @@ socket.onmessage = (event) => {
     bucket = new Map();
     bucketMaps.set(bucketId, bucket);
     bucketOrder.push(bucketId);
+    bucketIntensityMaps.set(bucketId, new Map());
 
     // Evict buckets older than WINDOW_MS and subtract their counts
     const keepBuckets = Math.ceil(WINDOW_MS / BUCKET_MS);
@@ -147,7 +150,9 @@ socket.onmessage = (event) => {
     while (bucketOrder.length && bucketOrder[0] < minBucketId) {
       const oldId = bucketOrder.shift();
       const oldBucket = bucketMaps.get(oldId);
+      const oldBucketIntensity = bucketIntensityMaps.get(oldId);
       bucketMaps.delete(oldId);
+      bucketIntensityMaps.delete(oldId);
       if (!oldBucket) continue;
 
       for (const [key, cnt] of oldBucket) {
@@ -155,13 +160,23 @@ socket.onmessage = (event) => {
         if (next > 0) voxelMap.set(key, next);
         else voxelMap.delete(key);
       }
+
+      if (oldBucketIntensity) {
+        for (const [key, isum] of oldBucketIntensity) {
+          const nextI = (voxelIntensitySum.get(key) || 0) - isum;
+          if (nextI > 0) voxelIntensitySum.set(key, nextI);
+          else voxelIntensitySum.delete(key);
+        }
+      }
     }
   }
+  const bucketIntensity = bucketIntensityMaps.get(bucketId);
 
   for (let i = 0; i < pts.length; i++) {
     let x = pts[i][0];
     let y = pts[i][1];
     let z = pts[i][2];
+    const intensity = (Array.isArray(pts[i]) && pts[i].length >= 4 && Number.isFinite(pts[i][3])) ? pts[i][3] : null;
 
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
 
@@ -184,13 +199,22 @@ socket.onmessage = (event) => {
     const key = voxelKey(ix, iy, iz);
     voxelMap.set(key, (voxelMap.get(key) || 0) + 1);
     bucket.set(key, (bucket.get(key) || 0) + 1);
+
+    if (intensity !== null) {
+      voxelIntensitySum.set(key, (voxelIntensitySum.get(key) || 0) + intensity);
+      if (bucketIntensity) {
+        bucketIntensity.set(key, (bucketIntensity.get(key) || 0) + intensity);
+      }
+    }
   }
 
   // ---- Safety cap ----
   if (voxelMap.size > MAX_VOXELS) {
     voxelMap.clear();
+    voxelIntensitySum.clear();
     bucketMaps.clear();
     bucketOrder.length = 0;
+    bucketIntensityMaps.clear();
     console.warn("Voxel map reset (size limit reached)");
   }
 
@@ -208,17 +232,25 @@ socket.onmessage = (event) => {
       iz * VOXEL_SIZE
     );
 
-    // Color by “density”: low-count voxels look like empty space,
-    // high-count voxels are treated as “objects”.
-    // If you later add intensity/reflectivity from the real LiDAR,
-    // we can color by that instead.
-    const t = Math.min(1, Math.max(0, (count - 1) / (OBJECT_HITS - 1)));
-    // t=0 => cyan/blue (empty), t=1 => orange/red (object)
-    voxelColors.push(
-      0.1 + 0.9 * t,     // r
-      0.6 - 0.4 * t,     // g
-      1.0 - 0.9 * t      // b
-    );
+    // Prefer coloring by intensity (if present); fall back to density heuristic.
+    const isum = voxelIntensitySum.get(key);
+    if (Number.isFinite(isum) && isum > 0) {
+      const avgI = isum / count;          // 0..255-ish
+      const tI = Math.min(1, Math.max(0, avgI / 255.0));
+      // low intensity => blue, high intensity => red
+      voxelColors.push(
+        0.1 + 0.9 * tI,   // r
+        0.2 + 0.5 * (1 - tI), // g
+        1.0 - 0.9 * tI    // b
+      );
+    } else {
+      const t = Math.min(1, Math.max(0, (count - 1) / (OBJECT_HITS - 1)));
+      voxelColors.push(
+        0.1 + 0.9 * t,     // r
+        0.6 - 0.4 * t,     // g
+        1.0 - 0.9 * t      // b
+      );
+    }
   }
 
   geometry.setAttribute(

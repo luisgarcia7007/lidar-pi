@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import socket
+import struct
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -70,6 +71,11 @@ def _decode_points(
         return arr, 0.001
 
     fmt = fmt.lower()
+    if fmt == "unitree_l2_packet":
+        decoded = _decode_unitree_l2_point_packet(payload)
+        if decoded is None:
+            return None
+        return decoded, 1.0
     if fmt == "f32xyz":
         return try_f32(3)
     if fmt == "f32xyzi":
@@ -96,6 +102,13 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
       - int16/uint16 little-endian xyz/xyzi (assumed millimeters)
     Returns (points, scale, header_bytes, fmt_name).
     """
+
+    # Unitree L2 SDK v2 packet format (starts with 0x55 0xAA 0x05 0x0A).
+    # This packet contains ranges + intensities and is converted to XYZI in meters.
+    if len(payload) >= 12 and payload[:4] == b"\x55\xaa\x05\x0a":
+        pts = _decode_unitree_l2_point_packet(payload)
+        if pts is not None:
+            return (pts, 1.0, 0, "unitree_l2_packet")
 
     def score(arr: PointArray) -> float:
         # Prefer more points, non-trivial spread, and finite values.
@@ -158,6 +171,147 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
                 best_score = s
 
     return best
+
+
+def _decode_unitree_l2_point_packet(payload: bytes) -> Optional[PointArray]:
+    """
+    Decode a Unitree LiDAR L2 UDP point packet (SDK v2 format) into XYZI points.
+
+    This follows the equations in the vendor SDK's `parseFromPacketToPointCloud`.
+    Returns an (N,4) float32 array: x,y,z in meters; intensity in [0,255].
+    """
+    if len(payload) < 12:
+        return None
+    if payload[:4] != b"\x55\xaa\x05\x0a":
+        return None
+
+    try:
+        _hdr, packet_type, packet_size = struct.unpack_from("<4sII", payload, 0)
+    except struct.error:
+        return None
+
+    # 102 = LIDAR_POINT_DATA_PACKET_TYPE
+    if packet_type != 102:
+        return None
+    if packet_size > len(payload):
+        return None
+
+    # Layout based on the SDK v2 header `unitree_lidar_protocol.h`
+    off = 12  # FrameHeader
+
+    # DataInfo (16 bytes)
+    try:
+        seq, payload_size, sec, nsec = struct.unpack_from("<IIII", payload, off)
+    except struct.error:
+        return None
+    off += 16
+
+    # LidarInsideState: 2x uint32 + 7x float
+    try:
+        _sys_rot, _com_rot, *_state_f = struct.unpack_from("<IIfffffff", payload, off)
+    except struct.error:
+        return None
+    off += 8 + 7 * 4
+
+    # LidarCalibParam: 8 floats
+    try:
+        (
+            a_axis_dist,
+            b_axis_dist,
+            theta_angle_bias,
+            alpha_angle_bias,
+            beta_angle,
+            xi_angle,
+            range_bias,
+            range_scale,
+        ) = struct.unpack_from("<ffffffff", payload, off)
+    except struct.error:
+        return None
+    off += 8 * 4
+
+    # Line info: 8 floats
+    try:
+        (
+            com_horizontal_angle_start,
+            com_horizontal_angle_step,
+            scan_period,
+            range_min_m,
+            range_max_m,
+            angle_min,
+            angle_increment,
+            time_increment,
+        ) = struct.unpack_from("<ffffffff", payload, off)
+    except struct.error:
+        return None
+    off += 8 * 4
+
+    # point_num
+    try:
+        point_num = struct.unpack_from("<I", payload, off)[0]
+    except struct.error:
+        return None
+    off += 4
+    if point_num == 0:
+        return np.empty((0, 4), dtype=np.float32)
+    if point_num > 300:
+        # protocol max
+        point_num = 300
+
+    # ranges[300] uint16, intensities[300] uint8
+    try:
+        ranges = np.frombuffer(payload, dtype="<u2", count=300, offset=off).astype(np.float32)
+    except ValueError:
+        return None
+    off_ranges = off
+    off_int = off_ranges + 300 * 2
+    try:
+        intensities = np.frombuffer(payload, dtype=np.uint8, count=300, offset=off_int).astype(np.float32)
+    except ValueError:
+        return None
+
+    # Convert packet to XYZI cloud (meters)
+    j = np.arange(point_num, dtype=np.float32)
+    r_raw = ranges[:point_num]
+    mask = r_raw >= 1.0
+    if not np.any(mask):
+        return np.empty((0, 4), dtype=np.float32)
+
+    # range_scale converts (mm + bias_mm) -> meters
+    r = range_scale * (r_raw + range_bias)
+
+    # device-provided range gate + optional user gate (handled at viewer via MIN/MAX range too)
+    mask &= (r >= range_min_m) & (r <= range_max_m)
+    if not np.any(mask):
+        return np.empty((0, 4), dtype=np.float32)
+
+    alpha = angle_min + alpha_angle_bias + j * angle_increment
+    theta = com_horizontal_angle_start + theta_angle_bias + j * com_horizontal_angle_step
+
+    sin_beta = np.sin(beta_angle)
+    cos_beta = np.cos(beta_angle)
+    sin_xi = np.sin(xi_angle)
+    cos_xi = np.cos(xi_angle)
+    cos_beta_sin_xi = cos_beta * sin_xi
+    sin_beta_cos_xi = sin_beta * cos_xi
+    sin_beta_sin_xi = sin_beta * sin_xi
+    cos_beta_cos_xi = cos_beta * cos_xi
+
+    sin_alpha = np.sin(alpha[mask])
+    cos_alpha = np.cos(alpha[mask])
+    sin_theta = np.sin(theta[mask])
+    cos_theta = np.cos(theta[mask])
+    r_m = r[mask]
+
+    A = (-cos_beta_sin_xi + sin_beta_cos_xi * sin_alpha) * r_m + b_axis_dist
+    B = cos_alpha * cos_xi * r_m
+    C = (sin_beta_sin_xi + cos_beta_cos_xi * sin_alpha) * r_m
+
+    x = cos_theta * A - sin_theta * B
+    y = sin_theta * A + cos_theta * B
+    z = C + a_axis_dist
+    inten = intensities[:point_num][mask]
+
+    return np.column_stack((x, y, z, inten)).astype(np.float32)
 
 
 def _demo_frame(num_points: int = 6000) -> Frame:
@@ -312,7 +466,7 @@ async def main():
     parser.add_argument(
         "--udp-format",
         default="auto",
-        choices=["auto", "f32xyz", "f32xyzi", "i16xyz_mm", "i16xyzi_mm"],
+        choices=["auto", "unitree_l2_packet", "f32xyz", "f32xyzi", "i16xyz_mm", "i16xyzi_mm"],
         help="How to decode incoming UDP payloads into points.",
     )
     parser.add_argument("--udp-header-bytes", type=int, default=0, help="Bytes to skip at start of each UDP packet.")
