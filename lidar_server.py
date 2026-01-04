@@ -103,11 +103,21 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
     Returns (points, scale, header_bytes, fmt_name).
     """
 
-    # Unitree L2 SDK v2 packet format (starts with 0x55 0xAA 0x05 0x0A).
-    # This packet contains ranges + intensities and is converted to XYZI in meters.
+    # Unitree L2 SDK v2 framing (starts with 0x55 0xAA 0x05 0x0A).
+    # Note: the LiDAR may also send IMU / status packets on the same UDP port.
+    # We should *not* try to interpret those as point data (it can cause a bad lock-on).
     if len(payload) >= 12 and payload[:4] == b"\x55\xaa\x05\x0a":
+        try:
+            _hdr, packet_type, _packet_size = struct.unpack_from("<4sII", payload, 0)
+        except struct.error:
+            return None
+
+        # 102 = point data packet; ignore others during auto-detect.
+        if packet_type != 102:
+            return None
+
         pts = _decode_unitree_l2_point_packet(payload)
-        # Only accept if we actually produced usable points; otherwise fall back to generic heuristics.
+        # Only accept if we actually produced usable points.
         if pts is not None and pts.shape[0] > 0 and np.isfinite(pts[:, :3]).all():
             return (pts, 1.0, 0, "unitree_l2_packet")
 
@@ -141,6 +151,10 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
     best = None
     best_score = -1.0
 
+    # Avoid locking onto tiny payloads (often metadata/IMU/etc.).
+    if len(payload) < 256:
+        return None
+
     for hb in range(0, 65, 4):
         if len(payload) <= hb:
             continue
@@ -157,6 +171,10 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
             # Normalize to float32 for downstream
             if arr.dtype != np.float32:
                 arr = arr.astype(np.float32)
+
+            # Require a minimum number of points to avoid locking on junk.
+            if arr.shape[0] < 50:
+                continue
 
             s = score(arr)
             if s > best_score:
