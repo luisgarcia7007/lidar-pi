@@ -81,13 +81,83 @@ def _decode_points(
     if fmt != "auto":
         raise ValueError(f"Unknown format: {fmt}")
 
-    # auto-detect in a reasonable order
-    for candidate in ("f32xyzi", "f32xyz", "i16xyzi_mm", "i16xyz_mm"):
-        decoded = _decode_points(payload, fmt=candidate, header_bytes=0)
-        if decoded is not None:
-            return decoded
-
+    # NOTE: deeper auto-detect (with header + endianness) is implemented in
+    # _decode_points_auto() so we can return the detected format and lock onto it.
     return None
+
+
+def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int, str]]:
+    """
+    Best-effort decode for unknown UDP payloads.
+
+    Tries:
+      - optional headers (0..64 bytes, 4-byte aligned)
+      - float32 little/big endian xyz/xyzi
+      - int16/uint16 little-endian xyz/xyzi (assumed millimeters)
+    Returns (points, scale, header_bytes, fmt_name).
+    """
+
+    def score(arr: PointArray) -> float:
+        # Prefer more points, non-trivial spread, and finite values.
+        if arr.size == 0:
+            return -1.0
+        xyz = arr[:, :3]
+        if not np.isfinite(xyz).all():
+            return -1.0
+        max_abs = float(np.max(np.abs(xyz)))
+        if max_abs == 0.0:
+            return -1.0
+        # light penalty for absurdly large values (still allow; may be mm)
+        penalty = 0.0
+        if max_abs > 1e7:
+            penalty = 1e6
+        return float(arr.shape[0]) * 10.0 - penalty
+
+    candidates = [
+        ("<f4", 4, "f32xyz", 3),
+        ("<f4", 4, "f32xyzi", 4),
+        (">f4", 4, "f32xyz_be", 3),
+        (">f4", 4, "f32xyzi_be", 4),
+        ("<i2", 2, "i16xyz_mm", 3),
+        ("<i2", 2, "i16xyzi_mm", 4),
+        ("<u2", 2, "u16xyz_mm", 3),
+        ("<u2", 2, "u16xyzi_mm", 4),
+    ]
+
+    best = None
+    best_score = -1.0
+
+    for hb in range(0, 65, 4):
+        if len(payload) <= hb:
+            continue
+        body = payload[hb:]
+
+        for dtype, width, name, cols in candidates:
+            if len(body) % (width * cols) != 0:
+                continue
+            try:
+                arr = np.frombuffer(body, dtype=np.dtype(dtype)).reshape(-1, cols)
+            except Exception:
+                continue
+
+            # Normalize to float32 for downstream
+            if arr.dtype != np.float32:
+                arr = arr.astype(np.float32)
+
+            s = score(arr)
+            if s > best_score:
+                # scale heuristic by type + magnitude
+                xyz = arr[:, :3]
+                max_abs = float(np.max(np.abs(xyz))) if xyz.size else 0.0
+                if name.startswith("f32"):
+                    scale = 0.001 if max_abs > 500.0 else 1.0
+                else:
+                    # int16/uint16 assumed mm
+                    scale = 0.001
+                best = (arr, scale, hb, name)
+                best_score = s
+
+    return best
 
 
 def _demo_frame(num_points: int = 6000) -> Frame:
@@ -153,12 +223,22 @@ class UdpPointSource:
                 break
 
             self._pkts += 1
-            decoded = _decode_points(data, fmt=self.fmt, header_bytes=self.header_bytes)
-            if decoded is None:
-                continue
-
-            arr, scale = decoded
-            self._last_scale = scale
+            if self.fmt == "auto":
+                auto = _decode_points_auto(data)
+                if auto is None:
+                    continue
+                arr, scale, hb, detected = auto
+                # lock onto detected format for performance
+                self.fmt = detected
+                self.header_bytes = hb
+                self._last_scale = scale
+                print(f"Auto-detected UDP point format: {detected} (header_bytes={hb}, scale={scale})")
+            else:
+                decoded = _decode_points(data, fmt=self.fmt, header_bytes=self.header_bytes)
+                if decoded is None:
+                    continue
+                arr, scale = decoded
+                self._last_scale = scale
             self._decoded_pkts += 1
             self._points += int(arr.shape[0])
             self._buf.append(arr)
