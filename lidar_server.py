@@ -107,7 +107,8 @@ def _decode_points_auto(payload: bytes) -> Optional[Tuple[PointArray, float, int
     # This packet contains ranges + intensities and is converted to XYZI in meters.
     if len(payload) >= 12 and payload[:4] == b"\x55\xaa\x05\x0a":
         pts = _decode_unitree_l2_point_packet(payload)
-        if pts is not None:
+        # Only accept if we actually produced usable points; otherwise fall back to generic heuristics.
+        if pts is not None and pts.shape[0] > 0 and np.isfinite(pts[:, :3]).all():
             return (pts, 1.0, 0, "unitree_l2_packet")
 
     def score(arr: PointArray) -> float:
@@ -311,7 +312,12 @@ def _decode_unitree_l2_point_packet(payload: bytes) -> Optional[PointArray]:
     z = C + a_axis_dist
     inten = intensities[:point_num][mask]
 
-    return np.column_stack((x, y, z, inten)).astype(np.float32)
+    pts = np.column_stack((x, y, z, inten)).astype(np.float32)
+    # Drop any non-finite points (can happen if packet endianness/config is unexpected).
+    finite = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1]) & np.isfinite(pts[:, 2])
+    if not np.any(finite):
+        return np.empty((0, 4), dtype=np.float32)
+    return pts[finite]
 
 
 def _demo_frame(num_points: int = 6000) -> Frame:
