@@ -111,6 +111,7 @@ class UdpPointSource:
         self._sock: Optional[socket.socket] = None
         self._buf: Deque[PointArray] = deque()
         self._last_frame_t = time.monotonic()
+        self._last_scale: float = 1.0
 
         # stats
         self._pkts = 0
@@ -136,12 +137,11 @@ class UdpPointSource:
             self.start()
 
         assert self._sock is not None
-        loop = asyncio.get_running_loop()
 
         # Read as many datagrams as are available right now (non-blocking).
         while True:
             try:
-                data, _addr = await loop.sock_recvfrom(self._sock, 65535)
+                data, _addr = self._sock.recvfrom(65535)
             except (BlockingIOError, InterruptedError):
                 break
             except Exception:
@@ -153,6 +153,7 @@ class UdpPointSource:
                 continue
 
             arr, scale = decoded
+            self._last_scale = scale
             self._decoded_pkts += 1
             self._points += int(arr.shape[0])
             self._buf.append(arr)
@@ -183,18 +184,7 @@ class UdpPointSource:
             idx = np.random.choice(merged.shape[0], self.max_points, replace=False)
             merged = merged[idx]
 
-        # We assume scale is consistent (first decoded packet).
-        # If your device mixes scales, set explicit fmt to avoid auto confusion.
-        _, scale = _decode_points(b"\x00" * 0, fmt="i16xyz_mm") or (None, 0.001)  # type: ignore
-        # Better: infer scale from format
-        scale = 0.001 if "i16" in self.fmt else 1.0
-        if self.fmt == "auto":
-            # if auto, try to infer from typical unit range
-            # (this is best-effort; prefer setting --udp-format explicitly)
-            max_abs = float(np.max(np.abs(merged[:, :3])))
-            scale = 0.001 if max_abs > 200.0 else 1.0
-
-        return Frame(points=merged, scale=scale)
+        return Frame(points=merged, scale=self._last_scale)
 
 
 def _frame_to_message(frame: Frame) -> str:
