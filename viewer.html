@@ -76,12 +76,13 @@ scene.add(voxelPoints);
    ===================================================== */
 const DEFAULT_SCALE = 1.0;  // assume meters unless server provides `scale`
 const MIN_RANGE = 0.1;
-const MAX_RANGE = 30.0;     // Unitree L2 max range (per user)
+const MAX_RANGE = 30.0;     // meters (viewer-side range gate)
 
-const VOXEL_SIZE = 0.25;   // meters (bigger = fewer points, faster)
+// Smaller voxels = more visible detail (more points to render).
+const VOXEL_SIZE = 0.12;   // meters
 const MIN_HITS = 1;        // show all returns (no-return points aren't transmitted)
 const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
-const MAX_VOXELS = 400_000;
+const MAX_VOXELS = 800_000;
 
 // Coloring
 // - "intensity": uses reflectivity when provided by server
@@ -92,8 +93,8 @@ const HEIGHT_MIN = -2.0;   // meters (used when COLOR_MODE="height")
 const HEIGHT_MAX =  3.0;   // meters (used when COLOR_MODE="height")
 
 // Rolling time window for "live" map (avoid accumulating forever)
-const WINDOW_MS = 30000;   // keep last 30 seconds
-const BUCKET_MS = 250;     // time bucket size (120 buckets for 30s)
+const WINDOW_MS = 120000;  // keep last 2 minutes
+const BUCKET_MS = 500;     // time bucket size (240 buckets for 2 minutes)
 
 const voxelMap = new Map();
 const voxelPositions = [];
