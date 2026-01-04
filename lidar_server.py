@@ -50,9 +50,14 @@ def _decode_points(
         if not np.isfinite(arr).all():
             return None
         xyz = arr[:, :3]
-        if np.max(np.abs(xyz)) > 1e4:  # >10 km in meters is likely wrong
-            return None
-        return arr, 1.0
+        max_abs = float(np.max(np.abs(xyz))) if xyz.size else 0.0
+
+        # Unit heuristic:
+        # - If the device sends float32 in millimeters, values are commonly in the 0..50000 range.
+        # - If it sends float32 in meters, values are commonly 0..200 range.
+        # This is best-effort; you can always override scaling on the viewer side if needed.
+        scale = 0.001 if max_abs > 500.0 else 1.0
+        return arr, scale
 
     def try_i16(cols: int) -> Optional[Tuple[PointArray, float]]:
         if len(payload) % (2 * cols) != 0:
