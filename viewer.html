@@ -41,7 +41,7 @@ const camera = new THREE.PerspectiveCamera(
   0.01,
   1000
 );
-camera.position.set(0, 0, 60);
+camera.position.set(0, 15, 120);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -53,16 +53,17 @@ controls.enableDamping = true;
 /* =====================================================
    HELPERS
    ===================================================== */
-scene.add(new THREE.AxesHelper(20));
-scene.add(new THREE.GridHelper(100, 20));
+scene.add(new THREE.AxesHelper(50));
+scene.add(new THREE.GridHelper(200, 40));
 
 /* =====================================================
    POINT CLOUD (VOXEL OUTPUT)
    ===================================================== */
 const geometry = new THREE.BufferGeometry();
 const material = new THREE.PointsMaterial({
-  size: 1.5,
-  color: 0x00ffcc
+  // Smaller points to avoid “solid cube” look
+  size: 0.4,
+  vertexColors: true
 });
 const voxelPoints = new THREE.Points(geometry, material);
 scene.add(voxelPoints);
@@ -72,14 +73,16 @@ scene.add(voxelPoints);
    ===================================================== */
 const DEFAULT_SCALE = 1.0;  // assume meters unless server provides `scale`
 const MIN_RANGE = 0.3;
-const MAX_RANGE = 30.0;
+const MAX_RANGE = 80.0;     // expand scanned volume
 
-const VOXEL_SIZE = 0.2;    // meters
-const MIN_HITS = 5;        // density threshold
-const MAX_VOXELS = 200_000;
+const VOXEL_SIZE = 0.25;   // meters (bigger = fewer points, faster)
+const MIN_HITS = 1;        // show everything; color encodes density
+const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
+const MAX_VOXELS = 400_000;
 
 const voxelMap = new Map();
 const voxelPositions = [];
+const voxelColors = [];
 
 function voxelKey(ix, iy, iz) {
   return ix + ',' + iy + ',' + iz;
@@ -156,6 +159,7 @@ socket.onmessage = (event) => {
 
   /* -------- Rebuild render buffer -------- */
   voxelPositions.length = 0;
+  voxelColors.length = 0;
 
   for (const [key, count] of voxelMap) {
     if (count < MIN_HITS) continue;
@@ -166,11 +170,27 @@ socket.onmessage = (event) => {
       iy * VOXEL_SIZE,
       iz * VOXEL_SIZE
     );
+
+    // Color by “density”: low-count voxels look like empty space,
+    // high-count voxels are treated as “objects”.
+    // If you later add intensity/reflectivity from the real LiDAR,
+    // we can color by that instead.
+    const t = Math.min(1, Math.max(0, (count - 1) / (OBJECT_HITS - 1)));
+    // t=0 => cyan/blue (empty), t=1 => orange/red (object)
+    voxelColors.push(
+      0.1 + 0.9 * t,     // r
+      0.6 - 0.4 * t,     // g
+      1.0 - 0.9 * t      // b
+    );
   }
 
   geometry.setAttribute(
     'position',
     new THREE.Float32BufferAttribute(voxelPositions, 3)
+  );
+  geometry.setAttribute(
+    'color',
+    new THREE.Float32BufferAttribute(voxelColors, 3)
   );
 
   geometry.computeBoundingSphere();
