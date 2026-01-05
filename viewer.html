@@ -60,6 +60,17 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(0, 15, 120);
 
+// =====================================================
+// TUNING (edit these)
+// =====================================================
+// Fixed reference grid at LiDAR height (meters)
+const GRID_SIZE = 10;        // total width/length of grid
+const GRID_DIVISIONS = 100;  // higher = finer grid lines
+
+// Rendered point sprite size (screen pixels). If you zoom in a lot, large point sizes
+// can look like “squares”. Lower this to make points look smaller.
+const POINT_SIZE = 1.0;
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
@@ -81,7 +92,7 @@ function setGrid(size, divisions) {
   groundGrid.material.opacity = 0.55;
   scene.add(groundGrid);
 }
-setGrid(2, 40); // start small; will auto-scale once points arrive
+setGrid(GRID_SIZE, GRID_DIVISIONS);
 
 /* =====================================================
    POINT CLOUD (VOXEL OUTPUT)
@@ -89,7 +100,7 @@ setGrid(2, 40); // start small; will auto-scale once points arrive
 const geometry = new THREE.BufferGeometry();
 const material = new THREE.PointsMaterial({
   // Smaller points to avoid “solid cube” look
-  size: 0.4,
+  size: POINT_SIZE,
   vertexColors: true
 });
 const voxelPoints = new THREE.Points(geometry, material);
@@ -118,7 +129,8 @@ const HEIGHT_MIN = -2.0;   // meters (used when COLOR_MODE="height")
 const HEIGHT_MAX =  3.0;   // meters (used when COLOR_MODE="height")
 
 // Auto-scale the grid and camera to current point cloud bounds.
-const AUTO_VIEW = true;
+// If enabled, this will auto-zoom and can make points look like squares if POINT_SIZE is large.
+const AUTO_VIEW = false;
 let lastAutoViewMs = 0;
 
 // Rolling time window for "live" map (avoid accumulating forever)
