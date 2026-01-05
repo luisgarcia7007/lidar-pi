@@ -69,7 +69,7 @@ const GRID_DIVISIONS = 100;  // higher = finer grid lines
 
 // Rendered point sprite size (screen pixels). If you zoom in a lot, large point sizes
 // can look like “squares”. Lower this to make points look smaller.
-let POINT_SIZE = 0.35;
+let POINT_SIZE = 0.12;
 
 // Render mode:
 // - "raw": render incoming points directly (looks like a real point cloud)
@@ -78,12 +78,17 @@ let RENDER_MODE = "raw"; // press v to toggle
 
 // Limit how often we rebuild GPU buffers (reduces "refreshing" feel).
 // Note: WINDOW_MS controls accumulation duration, not redraw rate.
-const RENDER_FPS = 10;
+const RENDER_FPS = 2; // ~2 updates/sec by default
 let lastRenderMs = 0;
+let PAUSED = false;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+// Make it easier for keyboard shortcuts to work: click canvas to focus.
+renderer.domElement.tabIndex = 0;
+renderer.domElement.style.outline = 'none';
+renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -236,7 +241,8 @@ function updateHud() {
     `Mode: ${RENDER_MODE} (v to toggle)\n` +
     `Voxel: ${VOXEL_SIZE.toFixed(3)} m  Point: ${POINT_SIZE.toFixed(2)} px\n` +
     `Window: ${(WINDOW_MS/1000).toFixed(0)} s\n` +
-    `Keys: [ / ] point size, { / } voxel size, - / = point size`;
+    `Keys: [ / ] point size, { / } voxel size, v toggle mode\n` +
+    `Space: pause (${PAUSED ? 'ON' : 'OFF'})  (click scene for keys)`;
 }
 updateHud();
 window.addEventListener('keydown', (e) => {
@@ -244,9 +250,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '2') COLOR_MODE = 'range';
   else if (e.key === '3') COLOR_MODE = 'intensity';
   else if (e.key === 'v' || e.key === 'V') RENDER_MODE = (RENDER_MODE === 'raw') ? 'voxel' : 'raw';
+  else if (e.key === ' ') PAUSED = !PAUSED;
   // Point size controls (more intuitive for users)
   else if (e.key === '[') {
-    POINT_SIZE = Math.max(0.01, POINT_SIZE * 0.8);
+    POINT_SIZE = Math.max(0.005, POINT_SIZE * 0.8);
     rawMaterial.size = POINT_SIZE;
     voxelMaterial.size = POINT_SIZE;
   } else if (e.key === ']') {
@@ -266,7 +273,7 @@ window.addEventListener('keydown', (e) => {
     bucketMaps.clear(); bucketOrder.length = 0;
     bucketIntensityMaps.clear(); bucketHeightMaps.clear(); bucketRangeMaps.clear();
   } else if (e.key === '-' || e.key === '_') {
-    POINT_SIZE = Math.max(0.01, POINT_SIZE * 0.8);
+    POINT_SIZE = Math.max(0.005, POINT_SIZE * 0.8);
     rawMaterial.size = POINT_SIZE;
     voxelMaterial.size = POINT_SIZE;
   } else if (e.key === '=' || e.key === '+') {
@@ -279,6 +286,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 socket.onmessage = (event) => {
+  if (PAUSED) return;
   // Throttle buffer rebuilds to reduce flicker and CPU.
   // We do this at the top so both raw and voxel modes are limited.
   const now = performance.now();
