@@ -103,8 +103,8 @@ const MIN_RANGE = 0.1;
 const MAX_RANGE = 30.0;     // meters (viewer-side range gate)
 
 // Smaller voxels = more visible detail (more points to render).
-// For a small box (20–24 inches), 0.02m (~2cm) is much more readable than 0.12m.
-let VOXEL_SIZE = 0.02;   // meters
+// For a small box (20–24 inches), 0.005m (~5mm) gives fine detail.
+let VOXEL_SIZE = 0.005;   // meters
 const MIN_HITS = 1;        // show all returns (no-return points aren't transmitted)
 const OBJECT_HITS = 6;     // heuristic “object vs empty” threshold
 const MAX_VOXELS = 800_000;
@@ -179,7 +179,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '2') COLOR_MODE = 'range';
   else if (e.key === '3') COLOR_MODE = 'intensity';
   else if (e.key === '[') {
-    VOXEL_SIZE = Math.max(0.005, VOXEL_SIZE * 0.8);
+    VOXEL_SIZE = Math.max(0.001, VOXEL_SIZE * 0.8);
     voxelMap.clear(); voxelIntensitySum.clear(); voxelHeightSum.clear(); voxelRangeSum.clear();
     bucketMaps.clear(); bucketOrder.length = 0;
     bucketIntensityMaps.clear(); bucketHeightMaps.clear(); bucketRangeMaps.clear();
