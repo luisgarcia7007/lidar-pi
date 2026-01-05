@@ -27,6 +27,12 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
+# Load optional defaults (do not override environment variables).
+if [[ -f "$PROJECT_DIR/session_defaults.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/session_defaults.sh"
+fi
+
 WS_PORT="${WS_PORT:-8765}"
 UDP_HOST="${UDP_HOST:-0.0.0.0}"
 UDP_PORT="${UDP_PORT:-6201}"
