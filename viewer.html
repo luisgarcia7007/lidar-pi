@@ -69,7 +69,12 @@ const GRID_DIVISIONS = 100;  // higher = finer grid lines
 
 // Rendered point sprite size (screen pixels). If you zoom in a lot, large point sizes
 // can look like “squares”. Lower this to make points look smaller.
-const POINT_SIZE = 1.0;
+let POINT_SIZE = 0.35;
+
+// Render mode:
+// - "raw": render incoming points directly (looks like a real point cloud)
+// - "voxel": voxelized/accumulated view
+let RENDER_MODE = "raw"; // press v to toggle
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -77,6 +82,29 @@ document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+
+// Round point sprite (so points look like points, not square pixels)
+function makeCircleTexture(size = 64) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size * 0.45;
+  const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  grd.addColorStop(0.0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.6, 'rgba(255,255,255,0.8)');
+  grd.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
+const pointSprite = makeCircleTexture();
 
 /* =====================================================
    HELPERS
@@ -97,14 +125,32 @@ setGrid(GRID_SIZE, GRID_DIVISIONS);
 /* =====================================================
    POINT CLOUD (VOXEL OUTPUT)
    ===================================================== */
-const geometry = new THREE.BufferGeometry();
-const material = new THREE.PointsMaterial({
-  // Smaller points to avoid “solid cube” look
+const voxelGeometry = new THREE.BufferGeometry();
+const voxelMaterial = new THREE.PointsMaterial({
   size: POINT_SIZE,
-  vertexColors: true
+  sizeAttenuation: true,
+  map: pointSprite,
+  transparent: true,
+  alphaTest: 0.2,
+  depthWrite: false,
+  vertexColors: true,
 });
-const voxelPoints = new THREE.Points(geometry, material);
+const voxelPoints = new THREE.Points(voxelGeometry, voxelMaterial);
 scene.add(voxelPoints);
+
+// Raw (non-voxelized) point cloud rendering
+const rawGeometry = new THREE.BufferGeometry();
+const rawMaterial = new THREE.PointsMaterial({
+  size: POINT_SIZE,
+  sizeAttenuation: true,
+  map: pointSprite,
+  transparent: true,
+  alphaTest: 0.2,
+  depthWrite: false,
+  vertexColors: true,
+});
+const rawPoints = new THREE.Points(rawGeometry, rawMaterial);
+scene.add(rawPoints);
 
 /* =====================================================
    VOXEL MAP STATE  (⭐ THIS IS THE KEY PART ⭐)
@@ -182,14 +228,17 @@ function updateHud() {
   hudEl.textContent =
     `Color: ${COLOR_MODE} (1=height, 2=range, 3=intensity)\n` +
     `Range gate: ${MIN_RANGE}..${MAX_RANGE} m\n` +
-    `Voxel: ${VOXEL_SIZE.toFixed(3)} m  Window: ${(WINDOW_MS/1000).toFixed(0)} s\n` +
-    `Keys: [ / ] voxel size`;
+    `Mode: ${RENDER_MODE} (v to toggle)\n` +
+    `Voxel: ${VOXEL_SIZE.toFixed(3)} m  Point: ${POINT_SIZE.toFixed(2)} px\n` +
+    `Window: ${(WINDOW_MS/1000).toFixed(0)} s\n` +
+    `Keys: [ / ] voxel size, - / = point size`;
 }
 updateHud();
 window.addEventListener('keydown', (e) => {
   if (e.key === '1') COLOR_MODE = 'height';
   else if (e.key === '2') COLOR_MODE = 'range';
   else if (e.key === '3') COLOR_MODE = 'intensity';
+  else if (e.key === 'v' || e.key === 'V') RENDER_MODE = (RENDER_MODE === 'raw') ? 'voxel' : 'raw';
   else if (e.key === '[') {
     VOXEL_SIZE = Math.max(0.001, VOXEL_SIZE * 0.8);
     voxelMap.clear(); voxelIntensitySum.clear(); voxelHeightSum.clear(); voxelRangeSum.clear();
@@ -200,6 +249,14 @@ window.addEventListener('keydown', (e) => {
     voxelMap.clear(); voxelIntensitySum.clear(); voxelHeightSum.clear(); voxelRangeSum.clear();
     bucketMaps.clear(); bucketOrder.length = 0;
     bucketIntensityMaps.clear(); bucketHeightMaps.clear(); bucketRangeMaps.clear();
+  } else if (e.key === '-' || e.key === '_') {
+    POINT_SIZE = Math.max(0.05, POINT_SIZE * 0.8);
+    rawMaterial.size = POINT_SIZE;
+    voxelMaterial.size = POINT_SIZE;
+  } else if (e.key === '=' || e.key === '+') {
+    POINT_SIZE = Math.min(6.0, POINT_SIZE / 0.8);
+    rawMaterial.size = POINT_SIZE;
+    voxelMaterial.size = POINT_SIZE;
   }
   else return;
   updateHud();
@@ -215,6 +272,61 @@ socket.onmessage = (event) => {
 
   const pts = data.points;
   if (!Array.isArray(pts) || pts.length === 0) return;
+
+  // For raw rendering, build the current frame point buffers (no voxelization).
+  // We still apply the same coordinate frame mapping and range gate.
+  if (RENDER_MODE === "raw") {
+    const rawPos = [];
+    const rawCol = [];
+
+    for (let i = 0; i < pts.length; i++) {
+      const x0 = pts[i][0], y0 = pts[i][1], z0 = pts[i][2];
+      if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(z0)) continue;
+      const intensity = (Array.isArray(pts[i]) && pts[i].length >= 4 && Number.isFinite(pts[i][3])) ? pts[i][3] : null;
+
+      const x = x0 * (Number.isFinite(data.scale) ? data.scale : DEFAULT_SCALE);
+      const y = y0 * (Number.isFinite(data.scale) ? data.scale : DEFAULT_SCALE);
+      const z = z0 * (Number.isFinite(data.scale) ? data.scale : DEFAULT_SCALE);
+
+      const r = Math.sqrt(x*x + y*y + z*z);
+      if (r < MIN_RANGE || r > MAX_RANGE) continue;
+
+      // LiDAR -> world
+      const wx =  y;
+      const wy =  z;
+      const wz = -x;
+
+      rawPos.push(wx, wy, wz);
+
+      // Color per point based on current mode
+      if (COLOR_MODE === "intensity" && intensity !== null) {
+        const tI = Math.min(1, Math.max(0, intensity / 255.0));
+        rawCol.push(0.1 + 0.9 * tI, 0.2 + 0.5 * (1 - tI), 1.0 - 0.9 * tI);
+      } else if (COLOR_MODE === "range") {
+        const tR = Math.min(1, Math.max(0, r / MAX_RANGE));
+        rawCol.push(0.4 + 0.6 * tR, 0.9 - 0.7 * tR, 0.2 + 0.8 * tR);
+      } else {
+        const tH = Math.min(1, Math.max(0, (wy - HEIGHT_MIN) / (HEIGHT_MAX - HEIGHT_MIN)));
+        const rC = Math.min(1, Math.max(0, (tH - 0.5) * 2));
+        const bC = Math.min(1, Math.max(0, (0.5 - tH) * 2));
+        const gC = 1.0 - Math.abs(tH - 0.5) * 2;
+        rawCol.push(rC, gC, bC);
+      }
+    }
+
+    rawGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rawPos, 3));
+    rawGeometry.setAttribute('color', new THREE.Float32BufferAttribute(rawCol, 3));
+    rawGeometry.computeBoundingSphere();
+
+    // Hide voxel points in raw mode
+    voxelPoints.visible = false;
+    rawPoints.visible = true;
+    return;
+  }
+
+  // Voxel mode: show voxelized view, hide raw points.
+  voxelPoints.visible = true;
+  rawPoints.visible = false;
 
   /* -------- Insert points into voxel grid -------- */
   // If the server provides a scale (e.g., mm->m = 0.001), use it.
@@ -384,26 +496,26 @@ socket.onmessage = (event) => {
     }
   }
 
-  geometry.setAttribute(
+  voxelGeometry.setAttribute(
     'position',
     new THREE.Float32BufferAttribute(voxelPositions, 3)
   );
-  geometry.setAttribute(
+  voxelGeometry.setAttribute(
     'color',
     new THREE.Float32BufferAttribute(voxelColors, 3)
   );
 
-  geometry.computeBoundingSphere();
+  voxelGeometry.computeBoundingSphere();
 
   // Auto-fit camera + grid to what we're seeing (helps in small spaces).
-  if (AUTO_VIEW && geometry.boundingSphere && Number.isFinite(geometry.boundingSphere.radius)) {
+  if (AUTO_VIEW && voxelGeometry.boundingSphere && Number.isFinite(voxelGeometry.boundingSphere.radius)) {
     const now = performance.now();
     if (now - lastAutoViewMs > 500) {
       lastAutoViewMs = now;
-      const r = Math.max(0.25, geometry.boundingSphere.radius);
-      const cx = geometry.boundingSphere.center.x;
-      const cy = geometry.boundingSphere.center.y;
-      const cz = geometry.boundingSphere.center.z;
+      const r = Math.max(0.25, voxelGeometry.boundingSphere.radius);
+      const cx = voxelGeometry.boundingSphere.center.x;
+      const cy = voxelGeometry.boundingSphere.center.y;
+      const cz = voxelGeometry.boundingSphere.center.z;
 
       // Grid: size ~ 6*r, clamped
       const gridSize = Math.min(60, Math.max(0.6, r * 6));
