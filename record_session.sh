@@ -18,6 +18,11 @@ set -euo pipefail
 #   CAMERA_FPS=5
 #   CAMERA_CODEC=libx264
 #   CAMERA_CRF=23
+#   BEACON_MAC=AA:BB:CC:DD:EE:FF
+#   BEACON_NAME=BC021
+#   BEACON_UUID=74278bda-b644-4520-8f0c-720eaf059935
+#   BEACON_ADAPTER=hci0
+#   BEACON_N=2.0
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
@@ -36,9 +41,16 @@ CAMERA_FPS="${CAMERA_FPS:-5}"
 CAMERA_CODEC="${CAMERA_CODEC:-libx264}"
 CAMERA_CRF="${CAMERA_CRF:-23}"
 
+BEACON_MAC="${BEACON_MAC:-}"
+BEACON_NAME="${BEACON_NAME:-}"
+BEACON_UUID="${BEACON_UUID:-}"
+BEACON_ADAPTER="${BEACON_ADAPTER:-}"
+BEACON_N="${BEACON_N:-2.0}"
+
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LIDAR_LOG="$LOG_DIR/lidar_${STAMP}.jsonl"
 VIDEO_OUT="$LOG_DIR/video_${STAMP}.mkv"
+BEACON_OUT="$LOG_DIR/beacon_${STAMP}.jsonl"
 META_OUT="$LOG_DIR/session_${STAMP}.json"
 
 start_unix_ns="$(python3 - <<'PY'
@@ -50,6 +62,9 @@ PY
 echo "Session: $STAMP"
 echo "LiDAR log:  $LIDAR_LOG"
 echo "Video out:  $VIDEO_OUT"
+if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
+  echo "Beacon out: $BEACON_OUT"
+fi
 echo "Meta:       $META_OUT"
 echo
 echo "Starting LiDAR server (logs even without browser)..."
@@ -72,6 +87,18 @@ ffmpeg -hide_banner -loglevel warning -nostdin -y \
   >/dev/null 2>&1 &
 CAMERA_PID=$!
 
+BEACON_PID=""
+if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
+  echo "Starting beacon scan logger (BLE)..."
+  args=(--out "$BEACON_OUT" --n "$BEACON_N")
+  if [[ -n "$BEACON_MAC" ]]; then args+=(--mac "$BEACON_MAC"); fi
+  if [[ -n "$BEACON_NAME" ]]; then args+=(--name "$BEACON_NAME"); fi
+  if [[ -n "$BEACON_UUID" ]]; then args+=(--ibeacon-uuid "$BEACON_UUID"); fi
+  if [[ -n "$BEACON_ADAPTER" ]]; then args+=(--adapter "$BEACON_ADAPTER"); fi
+  python3 "$PROJECT_DIR/beacon_logger.py" "${args[@]}" >/dev/null 2>&1 &
+  BEACON_PID=$!
+fi
+
 cleanup() {
   echo
   echo "Stopping session..."
@@ -84,10 +111,16 @@ PY
   # Stop children
   kill "$CAMERA_PID" >/dev/null 2>&1 || true
   kill "$LIDAR_PID" >/dev/null 2>&1 || true
+  if [[ -n "$BEACON_PID" ]]; then
+    kill "$BEACON_PID" >/dev/null 2>&1 || true
+  fi
 
   # Wait a moment for flush
   wait "$CAMERA_PID" >/dev/null 2>&1 || true
   wait "$LIDAR_PID" >/dev/null 2>&1 || true
+  if [[ -n "$BEACON_PID" ]]; then
+    wait "$BEACON_PID" >/dev/null 2>&1 || true
+  fi
 
   python3 - <<PY
 import json
@@ -97,6 +130,7 @@ meta = {
   "stop_unix_ns": int("$stop_unix_ns"),
   "lidar_log": "$LIDAR_LOG",
   "video_out": "$VIDEO_OUT",
+  "beacon_out": "$BEACON_OUT" if (${#BEACON_PID} > 0) else None,
   "ws_port": int("$WS_PORT"),
   "udp_host": "$UDP_HOST",
   "udp_port": int("$UDP_PORT"),
@@ -106,6 +140,11 @@ meta = {
   "camera_fps": int("$CAMERA_FPS"),
   "camera_codec": "$CAMERA_CODEC",
   "camera_crf": int("$CAMERA_CRF"),
+  "beacon_mac": "$BEACON_MAC" or None,
+  "beacon_name": "$BEACON_NAME" or None,
+  "beacon_uuid": "$BEACON_UUID" or None,
+  "beacon_adapter": "$BEACON_ADAPTER" or None,
+  "beacon_n": float("$BEACON_N"),
 }
 with open("$META_OUT", "w", encoding="utf-8") as f:
   json.dump(meta, f, indent=2)
