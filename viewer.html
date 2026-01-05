@@ -11,6 +11,19 @@
     overflow: hidden;
     background: black;
   }
+  #cam {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    width: 320px;
+    height: 180px;
+    object-fit: cover;
+    z-index: 10;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(0,0,0,0.35);
+    display: none; /* enabled by JS if CAM_URL set */
+  }
   #hud {
     position: fixed;
     top: 10px;
@@ -32,6 +45,7 @@
 <body>
 
 <div id="hud"></div>
+<img id="cam" alt="camera feed" />
 
 <!-- Import map required for OrbitControls -->
 <script type="importmap">
@@ -67,6 +81,11 @@ camera.position.set(0, 15, 120);
 const GRID_SIZE = 10;        // total width/length of grid
 const GRID_DIVISIONS = 100;  // higher = finer grid lines
 
+// Camera overlay (MJPEG stream). Example:
+//   CAM_URL = "http://192.168.1.100:8090/cam.mjpg"
+// Start the stream with: ./start_camera_stream.sh
+const CAM_URL = ""; // empty = disabled
+
 // Rendered point sprite size (screen pixels). If you zoom in a lot, large point sizes
 // can look like “squares”. Lower this to make points look smaller.
 let POINT_SIZE = 0.12;
@@ -89,6 +108,13 @@ document.body.appendChild(renderer.domElement);
 renderer.domElement.tabIndex = 0;
 renderer.domElement.style.outline = 'none';
 renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
+
+// Enable camera overlay if configured
+const camEl = document.getElementById('cam');
+if (CAM_URL && camEl) {
+  camEl.src = CAM_URL;
+  camEl.style.display = 'block';
+}
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
