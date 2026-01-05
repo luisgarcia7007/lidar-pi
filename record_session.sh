@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Record a synchronized session:
+#  - LiDAR frames (JSONL) via lidar_server.py --log
+#  - Camera video (MKV) via ffmpeg (V4L2)
+#
+# Stop with Ctrl+C. A session meta JSON is written with start/stop timestamps.
+#
+# Environment overrides:
+#   WS_PORT=8765
+#   UDP_HOST=0.0.0.0
+#   UDP_PORT=6201
+#   UDP_FORMAT=auto
+#   LOG_DIR=/home/pi/lidar_web/logs
+#   CAMERA_DEV=/dev/video0
+#   CAMERA_SIZE=1920x1080
+#   CAMERA_FPS=5
+#   CAMERA_CODEC=libx264
+#   CAMERA_CRF=23
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
+
+WS_PORT="${WS_PORT:-8765}"
+UDP_HOST="${UDP_HOST:-0.0.0.0}"
+UDP_PORT="${UDP_PORT:-6201}"
+UDP_FORMAT="${UDP_FORMAT:-auto}"
+
+LOG_DIR="${LOG_DIR:-$PROJECT_DIR/logs}"
+mkdir -p "$LOG_DIR"
+
+CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
+CAMERA_SIZE="${CAMERA_SIZE:-1920x1080}"
+CAMERA_FPS="${CAMERA_FPS:-5}"
+CAMERA_CODEC="${CAMERA_CODEC:-libx264}"
+CAMERA_CRF="${CAMERA_CRF:-23}"
+
+STAMP="$(date +%Y%m%d_%H%M%S)"
+LIDAR_LOG="$LOG_DIR/lidar_${STAMP}.jsonl"
+VIDEO_OUT="$LOG_DIR/video_${STAMP}.mkv"
+META_OUT="$LOG_DIR/session_${STAMP}.json"
+
+start_unix_ns="$(python3 - <<'PY'
+import time
+print(time.time_ns())
+PY
+)"
+
+echo "Session: $STAMP"
+echo "LiDAR log:  $LIDAR_LOG"
+echo "Video out:  $VIDEO_OUT"
+echo "Meta:       $META_OUT"
+echo
+echo "Starting LiDAR server (logs even without browser)..."
+python3 "$PROJECT_DIR/lidar_server.py" \
+  --ws-port "$WS_PORT" \
+  --mode udp \
+  --udp-host "$UDP_HOST" \
+  --udp-port "$UDP_PORT" \
+  --udp-format "$UDP_FORMAT" \
+  --log "$LIDAR_LOG" \
+  >/dev/null 2>&1 &
+LIDAR_PID=$!
+
+echo "Starting camera capture (V4L2)..."
+ffmpeg -hide_banner -loglevel warning -nostdin -y \
+  -f v4l2 -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
+  -use_wallclock_as_timestamps 1 \
+  -c:v "$CAMERA_CODEC" -preset veryfast -crf "$CAMERA_CRF" \
+  -f matroska "$VIDEO_OUT" \
+  >/dev/null 2>&1 &
+CAMERA_PID=$!
+
+cleanup() {
+  echo
+  echo "Stopping session..."
+  stop_unix_ns="$(python3 - <<'PY'
+import time
+print(time.time_ns())
+PY
+)"
+
+  # Stop children
+  kill "$CAMERA_PID" >/dev/null 2>&1 || true
+  kill "$LIDAR_PID" >/dev/null 2>&1 || true
+
+  # Wait a moment for flush
+  wait "$CAMERA_PID" >/dev/null 2>&1 || true
+  wait "$LIDAR_PID" >/dev/null 2>&1 || true
+
+  python3 - <<PY
+import json
+meta = {
+  "session": "$STAMP",
+  "start_unix_ns": int("$start_unix_ns"),
+  "stop_unix_ns": int("$stop_unix_ns"),
+  "lidar_log": "$LIDAR_LOG",
+  "video_out": "$VIDEO_OUT",
+  "ws_port": int("$WS_PORT"),
+  "udp_host": "$UDP_HOST",
+  "udp_port": int("$UDP_PORT"),
+  "udp_format": "$UDP_FORMAT",
+  "camera_dev": "$CAMERA_DEV",
+  "camera_size": "$CAMERA_SIZE",
+  "camera_fps": int("$CAMERA_FPS"),
+  "camera_codec": "$CAMERA_CODEC",
+  "camera_crf": int("$CAMERA_CRF"),
+}
+with open("$META_OUT", "w", encoding="utf-8") as f:
+  json.dump(meta, f, indent=2)
+print("Wrote:", "$META_OUT")
+PY
+}
+
+trap cleanup INT TERM
+
+echo "Recording... press Ctrl+C to stop."
+echo
+
+# Wait until one of the processes exits (or Ctrl+C).
+while kill -0 "$LIDAR_PID" >/dev/null 2>&1 && kill -0 "$CAMERA_PID" >/dev/null 2>&1; do
+  sleep 1
+done
+
+cleanup
+
