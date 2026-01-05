@@ -76,6 +76,11 @@ let POINT_SIZE = 0.35;
 // - "voxel": voxelized/accumulated view
 let RENDER_MODE = "raw"; // press v to toggle
 
+// Limit how often we rebuild GPU buffers (reduces "refreshing" feel).
+// Note: WINDOW_MS controls accumulation duration, not redraw rate.
+const RENDER_FPS = 10;
+let lastRenderMs = 0;
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
@@ -231,7 +236,7 @@ function updateHud() {
     `Mode: ${RENDER_MODE} (v to toggle)\n` +
     `Voxel: ${VOXEL_SIZE.toFixed(3)} m  Point: ${POINT_SIZE.toFixed(2)} px\n` +
     `Window: ${(WINDOW_MS/1000).toFixed(0)} s\n` +
-    `Keys: [ / ] voxel size, - / = point size`;
+    `Keys: [ / ] point size, { / } voxel size, - / = point size`;
 }
 updateHud();
 window.addEventListener('keydown', (e) => {
@@ -239,18 +244,29 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '2') COLOR_MODE = 'range';
   else if (e.key === '3') COLOR_MODE = 'intensity';
   else if (e.key === 'v' || e.key === 'V') RENDER_MODE = (RENDER_MODE === 'raw') ? 'voxel' : 'raw';
+  // Point size controls (more intuitive for users)
   else if (e.key === '[') {
+    POINT_SIZE = Math.max(0.01, POINT_SIZE * 0.8);
+    rawMaterial.size = POINT_SIZE;
+    voxelMaterial.size = POINT_SIZE;
+  } else if (e.key === ']') {
+    POINT_SIZE = Math.min(6.0, POINT_SIZE / 0.8);
+    rawMaterial.size = POINT_SIZE;
+    voxelMaterial.size = POINT_SIZE;
+  }
+  // Voxel size controls (shift+[ and shift+])
+  else if (e.key === '{') {
     VOXEL_SIZE = Math.max(0.001, VOXEL_SIZE * 0.8);
     voxelMap.clear(); voxelIntensitySum.clear(); voxelHeightSum.clear(); voxelRangeSum.clear();
     bucketMaps.clear(); bucketOrder.length = 0;
     bucketIntensityMaps.clear(); bucketHeightMaps.clear(); bucketRangeMaps.clear();
-  } else if (e.key === ']') {
+  } else if (e.key === '}') {
     VOXEL_SIZE = Math.min(0.5, VOXEL_SIZE / 0.8);
     voxelMap.clear(); voxelIntensitySum.clear(); voxelHeightSum.clear(); voxelRangeSum.clear();
     bucketMaps.clear(); bucketOrder.length = 0;
     bucketIntensityMaps.clear(); bucketHeightMaps.clear(); bucketRangeMaps.clear();
   } else if (e.key === '-' || e.key === '_') {
-    POINT_SIZE = Math.max(0.05, POINT_SIZE * 0.8);
+    POINT_SIZE = Math.max(0.01, POINT_SIZE * 0.8);
     rawMaterial.size = POINT_SIZE;
     voxelMaterial.size = POINT_SIZE;
   } else if (e.key === '=' || e.key === '+') {
@@ -263,6 +279,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 socket.onmessage = (event) => {
+  // Throttle buffer rebuilds to reduce flicker and CPU.
+  // We do this at the top so both raw and voxel modes are limited.
+  const now = performance.now();
+  if (now - lastRenderMs < 1000 / RENDER_FPS) return;
+  lastRenderMs = now;
+
   let data;
   try {
     data = JSON.parse(event.data);
