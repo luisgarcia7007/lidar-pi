@@ -2,12 +2,14 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import socket
 import struct
 import time
 import zlib
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Deque, Optional, Tuple
 
 import numpy as np
@@ -592,6 +594,56 @@ class FrameBus:
             return self._latest
 
 
+@dataclass
+class BeaconState:
+    latest: Optional[dict] = None
+
+
+async def _tail_beacon_jsonl(path: str, state: BeaconState) -> None:
+    """
+    Tail a beacon_logger.py JSONL file and keep the latest record.
+
+    This is intentionally lightweight (no extra deps). It will:
+      - wait for the file to exist
+      - read appended lines forever
+      - ignore invalid JSON lines
+    """
+    p = Path(path).expanduser()
+    fh = None
+    while True:
+        try:
+            if fh is None:
+                if not p.exists():
+                    await asyncio.sleep(0.2)
+                    continue
+                fh = p.open("r", encoding="utf-8", errors="replace")
+                # If the file already has content, start from the end so "live" feels live.
+                fh.seek(0, os.SEEK_END)
+
+            line = fh.readline()
+            if not line:
+                await asyncio.sleep(0.1)
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                state.latest = rec
+        except Exception:
+            # If the file disappears/rotates, reopen.
+            try:
+                if fh is not None:
+                    fh.close()
+            except Exception:
+                pass
+            fh = None
+            await asyncio.sleep(0.5)
+
+
 async def _producer(
     *,
     source_mode: str,
@@ -620,14 +672,17 @@ async def _producer(
         await bus.publish(frame)
 
 
-async def lidar_stream(websocket, bus: FrameBus):
+async def lidar_stream(websocket, bus: FrameBus, beacon: Optional[BeaconState] = None):
     print("Client connected")
     last_id = -1
     try:
         while True:
             frame = await bus.wait_next(last_id)
             last_id = frame.id
-            await websocket.send(_frame_to_message(frame))
+            msg = json.loads(_frame_to_message(frame))
+            if beacon is not None and beacon.latest is not None:
+                msg["beacon"] = beacon.latest
+            await websocket.send(json.dumps(msg))
     except websockets.exceptions.ConnectionClosed:
         print("Client disconnected")
 
@@ -648,6 +703,11 @@ async def main():
     parser.add_argument("--max-points", type=int, default=80000, help="Cap points per frame for browser performance.")
     parser.add_argument("--log", default="", help="Write frames to this JSONL file (optional).")
     parser.add_argument("--log-flush-every", type=int, default=10, help="Flush log every N frames.")
+    parser.add_argument(
+        "--beacon-log",
+        default="",
+        help="Optional beacon JSONL file (from beacon_logger.py) to attach latest beacon info to each WS message.",
+    )
 
     args = parser.parse_args()
 
@@ -670,8 +730,14 @@ async def main():
     bus = FrameBus()
     asyncio.create_task(_producer(source_mode=args.mode, udp_source=udp_source, bus=bus, logger=logger))
 
+    beacon_state = None
+    if args.beacon_log:
+        beacon_state = BeaconState()
+        asyncio.create_task(_tail_beacon_jsonl(args.beacon_log, beacon_state))
+        print(f"Beacon tail enabled: {args.beacon_log}")
+
     async def handler(ws):
-        return await lidar_stream(ws, bus)
+        return await lidar_stream(ws, bus, beacon_state)
 
     async with websockets.serve(handler, "0.0.0.0", args.ws_port):
         print(f"LiDAR server running on port {args.ws_port} (mode={args.mode})")

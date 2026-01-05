@@ -80,13 +80,22 @@ echo "Meta:       $META_OUT"
 echo "Logs:       $LIDAR_STDLOG  $CAMERA_STDLOG  $BEACON_STDLOG"
 echo
 echo "Starting LiDAR server (logs even without browser)..."
+lidar_args=(
+  --ws-port "$WS_PORT"
+  --mode udp
+  --udp-host "$UDP_HOST"
+  --udp-port "$UDP_PORT"
+  --udp-format "$UDP_FORMAT"
+  --log "$LIDAR_LOG"
+)
+
+if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
+  # beacon_logger writes JSONL to $BEACON_OUT; lidar_server will tail it and attach latest to WS messages.
+  lidar_args+=(--beacon-log "$BEACON_OUT")
+fi
+
 python3 "$PROJECT_DIR/lidar_server.py" \
-  --ws-port "$WS_PORT" \
-  --mode udp \
-  --udp-host "$UDP_HOST" \
-  --udp-port "$UDP_PORT" \
-  --udp-format "$UDP_FORMAT" \
-  --log "$LIDAR_LOG" \
+  "${lidar_args[@]}" \
   >"$LIDAR_STDLOG" 2>&1 &
 LIDAR_PID=$!
 

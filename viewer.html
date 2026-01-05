@@ -11,18 +11,35 @@
     overflow: hidden;
     background: black;
   }
-  #cam {
+  #overlayRight {
     position: fixed;
     top: 10px;
     right: 10px;
+    z-index: 10;
+    display: none; /* enabled by JS if CAM_URL and/or BEACON_PANEL enabled */
+  }
+  #cam {
     width: 320px;
     height: 180px;
     object-fit: cover;
-    z-index: 10;
     border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.15);
     background: rgba(0,0,0,0.35);
     display: none; /* enabled by JS if CAM_URL set */
+  }
+  #beaconPanel {
+    margin-top: 8px;
+    width: 320px;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif;
+    font-size: 12px;
+    line-height: 1.35;
+    color: rgba(255,255,255,0.9);
+    background: rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 8px 10px;
+    border-radius: 8px;
+    user-select: none;
+    display: none; /* enabled by JS */
   }
   #hud {
     position: fixed;
@@ -45,7 +62,10 @@
 <body>
 
 <div id="hud"></div>
-<img id="cam" alt="camera feed" />
+<div id="overlayRight">
+  <img id="cam" alt="camera feed" />
+  <div id="beaconPanel"></div>
+</div>
 
 <!-- Import map required for OrbitControls -->
 <script type="importmap">
@@ -86,6 +106,10 @@ const GRID_DIVISIONS = 100;  // higher = finer grid lines
 // Start the stream with: ./start_camera_stream.sh
 const CAM_URL = ""; // empty = disabled
 
+// Beacon info overlay (sent by lidar_server.py when started with --beacon-log ...)
+// This panel is shown even without a camera if enabled.
+const BEACON_PANEL = true;
+
 // Rendered point sprite size (screen pixels). If you zoom in a lot, large point sizes
 // can look like “squares”. Lower this to make points look smaller.
 let POINT_SIZE = 0.12;
@@ -109,11 +133,53 @@ renderer.domElement.tabIndex = 0;
 renderer.domElement.style.outline = 'none';
 renderer.domElement.addEventListener('pointerdown', () => renderer.domElement.focus());
 
-// Enable camera overlay if configured
+// Enable right-side overlays if configured
+const overlayRightEl = document.getElementById('overlayRight');
 const camEl = document.getElementById('cam');
+const beaconEl = document.getElementById('beaconPanel');
+let lastBeacon = null;
+
+function setBeaconText(txt) {
+  if (!beaconEl) return;
+  beaconEl.textContent = txt;
+}
+
+function fmtMaybeNum(x, digits = 2) {
+  return (typeof x === 'number' && Number.isFinite(x)) ? x.toFixed(digits) : '—';
+}
+
+function renderBeacon(rec) {
+  if (!BEACON_PANEL || !beaconEl) return;
+  if (!rec || typeof rec !== 'object') {
+    setBeaconText('Beacon: —');
+    return;
+  }
+
+  const rssi = (typeof rec.rssi === 'number') ? rec.rssi : null;
+  const dist = (typeof rec.distance_m === 'number' && Number.isFinite(rec.distance_m)) ? rec.distance_m : null;
+  const name = rec.local_name || rec.name || null;
+  const mac = rec.address || rec.mac || null;
+  const ib = rec.ibeacon || null;
+  const uuid = (ib && ib.uuid) ? ib.uuid : null;
+  const major = (ib && typeof ib.major === 'number') ? ib.major : null;
+  const minor = (ib && typeof ib.minor === 'number') ? ib.minor : null;
+
+  let line1 = `Beacon: ${name || mac || 'unknown'}`;
+  let line2 = `RSSI: ${rssi !== null ? rssi + ' dBm' : '—'}   Dist: ${dist !== null ? fmtMaybeNum(dist, 2) + ' m' : '—'}`;
+  let line3 = uuid ? `iBeacon: ${uuid}${(major !== null && minor !== null) ? `  (${major}/${minor})` : ''}` : '';
+  setBeaconText([line1, line2, line3].filter(Boolean).join('\n'));
+}
+
 if (CAM_URL && camEl) {
   camEl.src = CAM_URL;
   camEl.style.display = 'block';
+}
+if (BEACON_PANEL && beaconEl) {
+  beaconEl.style.display = 'block';
+  renderBeacon(null);
+}
+if (overlayRightEl && ((CAM_URL && camEl) || (BEACON_PANEL && beaconEl))) {
+  overlayRightEl.style.display = 'block';
 }
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -324,6 +390,12 @@ socket.onmessage = (event) => {
     data = JSON.parse(event.data);
   } catch {
     return;
+  }
+
+  // Optional beacon data (lidar_server.py --beacon-log ...)
+  if (data && data.beacon && data.beacon !== lastBeacon) {
+    lastBeacon = data.beacon;
+    renderBeacon(lastBeacon);
   }
 
   const pts = data.points;
