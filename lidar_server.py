@@ -1,9 +1,11 @@
 import argparse
 import asyncio
+import base64
 import json
 import socket
 import struct
 import time
+import zlib
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Optional, Tuple
@@ -18,8 +20,33 @@ PointArray = np.ndarray
 
 @dataclass
 class Frame:
+    id: int
     points: PointArray  # shape (N, 3) or (N, 4) where last column is intensity
     scale: float  # multiply XYZ by this to get meters
+    t_unix_ns: int  # system wallclock when frame finalized
+    t_mono_ns: int  # system monotonic when frame finalized
+    lidar_stamp_sec: Optional[int] = None
+    lidar_stamp_nsec: Optional[int] = None
+    lidar_seq: Optional[int] = None
+    source_format: Optional[str] = None
+
+
+def _try_parse_unitree_data_info(payload: bytes) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Parse Unitree SDK v2 UDP framing header + DataInfo if present.
+
+    Returns (packet_type, seq, sec, nsec) or None.
+    """
+    if len(payload) < 12 + 16:
+        return None
+    if payload[:4] != b"\x55\xaa\x05\x0a":
+        return None
+    try:
+        _hdr, packet_type, _packet_size = struct.unpack_from("<4sII", payload, 0)
+        seq, _payload_size, sec, nsec = struct.unpack_from("<IIII", payload, 12)
+    except struct.error:
+        return None
+    return (packet_type, seq, sec, nsec)
 
 
 def _decode_points(
@@ -341,7 +368,67 @@ def _decode_unitree_l2_point_packet(payload: bytes) -> Optional[PointArray]:
 def _demo_frame(num_points: int = 6000) -> Frame:
     # Demo: generate millimeters so the viewer defaults work.
     pts = np.random.uniform(-12000, 12000, size=(num_points, 3)).astype(np.float32)
-    return Frame(points=pts, scale=0.001)
+    now_ns = time.time_ns()
+    mono_ns = time.monotonic_ns()
+    return Frame(
+        id=0,
+        points=pts,
+        scale=0.001,
+        t_unix_ns=now_ns,
+        t_mono_ns=mono_ns,
+        source_format="demo",
+    )
+
+
+class FrameLogger:
+    """
+    Append-only JSONL logger.
+
+    Each line contains:
+      - frame metadata (timestamps, format)
+      - point array encoded as base64(zlib(float32_bytes))
+    """
+
+    def __init__(self, path: str, compress_level: int = 3, flush_every: int = 10):
+        self.path = path
+        self.compress_level = compress_level
+        self.flush_every = flush_every
+        self._fh = open(path, "a", buffering=1)
+        self._count = 0
+
+    def close(self) -> None:
+        try:
+            self._fh.flush()
+        finally:
+            self._fh.close()
+
+    def write(self, frame: Frame) -> None:
+        pts = np.asarray(frame.points, dtype=np.float32)
+        raw = pts.tobytes(order="C")
+        comp = zlib.compress(raw, level=self.compress_level)
+        b64 = base64.b64encode(comp).decode("ascii")
+
+        rec = {
+            "frame_id": frame.id,
+            "t_unix_ns": frame.t_unix_ns,
+            "t_mono_ns": frame.t_mono_ns,
+            "lidar_seq": frame.lidar_seq,
+            "lidar_stamp_sec": frame.lidar_stamp_sec,
+            "lidar_stamp_nsec": frame.lidar_stamp_nsec,
+            "scale": frame.scale,
+            "source_format": frame.source_format,
+            "points": {
+                "dtype": "float32",
+                "shape": list(pts.shape),
+                "encoding": "base64+zlib",
+                "data": b64,
+            },
+        }
+
+        self._fh.write(json.dumps(rec) + "\n")
+        self._count += 1
+        if self.flush_every > 0 and (self._count % self.flush_every == 0):
+            self._fh.flush()
 
 
 class UdpPointSource:
@@ -365,6 +452,7 @@ class UdpPointSource:
         self._buf: Deque[PointArray] = deque()
         self._last_frame_t = time.monotonic()
         self._last_scale: float = 1.0
+        self._last_unitree_info: Optional[Tuple[int, int, int, int]] = None  # packet_type, seq, sec, nsec
 
         # stats
         self._pkts = 0
@@ -401,6 +489,9 @@ class UdpPointSource:
                 break
 
             self._pkts += 1
+            info = _try_parse_unitree_data_info(data)
+            if info is not None:
+                self._last_unitree_info = info
             if self.fmt == "auto":
                 auto = _decode_points_auto(data)
                 if auto is None:
@@ -447,7 +538,30 @@ class UdpPointSource:
             idx = np.random.choice(merged.shape[0], self.max_points, replace=False)
             merged = merged[idx]
 
-        return Frame(points=merged, scale=self._last_scale)
+        now_ns = time.time_ns()
+        mono_ns = time.monotonic_ns()
+        lidar_seq = None
+        lidar_sec = None
+        lidar_nsec = None
+        if self._last_unitree_info is not None:
+            packet_type, seq, sec, nsec = self._last_unitree_info
+            # Only attach lidar stamps for point packets (102).
+            if packet_type == 102:
+                lidar_seq = seq
+                lidar_sec = sec
+                lidar_nsec = nsec
+
+        return Frame(
+            id=0,
+            points=merged,
+            scale=self._last_scale,
+            t_unix_ns=now_ns,
+            t_mono_ns=mono_ns,
+            lidar_seq=lidar_seq,
+            lidar_stamp_sec=lidar_sec,
+            lidar_stamp_nsec=lidar_nsec,
+            source_format=self.fmt,
+        )
 
 
 def _frame_to_message(frame: Frame) -> str:
@@ -456,28 +570,64 @@ def _frame_to_message(frame: Frame) -> str:
         {
             "points": frame.points.tolist(),
             "scale": frame.scale,
+            "t_unix_ns": frame.t_unix_ns,
+            "lidar_seq": frame.lidar_seq,
         }
     )
 
-async def lidar_stream(websocket, source_mode: str, udp_source: Optional[UdpPointSource]):
-    print("Client connected")
+class FrameBus:
+    def __init__(self):
+        self._cond = asyncio.Condition()
+        self._latest: Optional[Frame] = None
 
+    async def publish(self, frame: Frame) -> None:
+        async with self._cond:
+            self._latest = frame
+            self._cond.notify_all()
+
+    async def wait_next(self, last_id: int) -> Frame:
+        async with self._cond:
+            await self._cond.wait_for(lambda: self._latest is not None and self._latest.id != last_id)
+            assert self._latest is not None
+            return self._latest
+
+
+async def _producer(
+    *,
+    source_mode: str,
+    udp_source: Optional[UdpPointSource],
+    bus: FrameBus,
+    logger: Optional[FrameLogger],
+):
+    frame_id = 0
+    while True:
+        if source_mode == "demo":
+            frame = _demo_frame()
+            await asyncio.sleep(0.05)
+        else:
+            assert udp_source is not None
+            frame = await udp_source.read_frame()
+            if frame is None:
+                await asyncio.sleep(0.005)
+                continue
+
+        frame_id += 1
+        frame.id = frame_id
+
+        if logger is not None:
+            logger.write(frame)
+
+        await bus.publish(frame)
+
+
+async def lidar_stream(websocket, bus: FrameBus):
+    print("Client connected")
+    last_id = -1
     try:
         while True:
-            if source_mode == "demo":
-                frame = _demo_frame()
-            else:
-                assert udp_source is not None
-                frame = await udp_source.read_frame()
-                if frame is None:
-                    await asyncio.sleep(0.005)
-                    continue
-
-            msg = _frame_to_message(frame)
-
-            await websocket.send(msg)
-            await asyncio.sleep(0.03)  # target ~30 FPS (frames are also gated by frame_ms)
-
+            frame = await bus.wait_next(last_id)
+            last_id = frame.id
+            await websocket.send(_frame_to_message(frame))
     except websockets.exceptions.ConnectionClosed:
         print("Client disconnected")
 
@@ -496,6 +646,8 @@ async def main():
     parser.add_argument("--udp-header-bytes", type=int, default=0, help="Bytes to skip at start of each UDP packet.")
     parser.add_argument("--frame-ms", type=int, default=50, help="Frame time in ms (merge packets into a frame).")
     parser.add_argument("--max-points", type=int, default=80000, help="Cap points per frame for browser performance.")
+    parser.add_argument("--log", default="", help="Write frames to this JSONL file (optional).")
+    parser.add_argument("--log-flush-every", type=int, default=10, help="Flush log every N frames.")
 
     args = parser.parse_args()
 
@@ -510,8 +662,16 @@ async def main():
             max_points=args.max_points,
         )
 
+    logger = None
+    if args.log:
+        logger = FrameLogger(args.log, flush_every=args.log_flush_every)
+        print(f"Logging enabled: {args.log}")
+
+    bus = FrameBus()
+    asyncio.create_task(_producer(source_mode=args.mode, udp_source=udp_source, bus=bus, logger=logger))
+
     async def handler(ws):
-        return await lidar_stream(ws, args.mode, udp_source)
+        return await lidar_stream(ws, bus)
 
     async with websockets.serve(handler, "0.0.0.0", args.ws_port):
         print(f"LiDAR server running on port {args.ws_port} (mode={args.mode})")
