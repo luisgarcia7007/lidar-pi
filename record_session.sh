@@ -16,6 +16,7 @@ set -euo pipefail
 #   CAMERA_DEV=/dev/video0
 #   CAMERA_SIZE=1920x1080
 #   CAMERA_FPS=5
+#   CAMERA_INPUT_FORMAT=mjpeg
 #   CAMERA_CODEC=libx264
 #   CAMERA_CRF=23
 #   BEACON_MAC=AA:BB:CC:DD:EE:FF
@@ -44,6 +45,7 @@ mkdir -p "$LOG_DIR"
 CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
 CAMERA_SIZE="${CAMERA_SIZE:-1920x1080}"
 CAMERA_FPS="${CAMERA_FPS:-5}"
+CAMERA_INPUT_FORMAT="${CAMERA_INPUT_FORMAT:-mjpeg}"
 CAMERA_CODEC="${CAMERA_CODEC:-libx264}"
 CAMERA_CRF="${CAMERA_CRF:-23}"
 
@@ -58,6 +60,9 @@ LIDAR_LOG="$LOG_DIR/lidar_${STAMP}.jsonl"
 VIDEO_OUT="$LOG_DIR/video_${STAMP}.mkv"
 BEACON_OUT="$LOG_DIR/beacon_${STAMP}.jsonl"
 META_OUT="$LOG_DIR/session_${STAMP}.json"
+LIDAR_STDLOG="$LOG_DIR/lidar_server_${STAMP}.log"
+CAMERA_STDLOG="$LOG_DIR/camera_${STAMP}.log"
+BEACON_STDLOG="$LOG_DIR/beacon_${STAMP}.log"
 
 start_unix_ns="$(python3 - <<'PY'
 import time
@@ -72,6 +77,7 @@ if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
   echo "Beacon out: $BEACON_OUT"
 fi
 echo "Meta:       $META_OUT"
+echo "Logs:       $LIDAR_STDLOG  $CAMERA_STDLOG  $BEACON_STDLOG"
 echo
 echo "Starting LiDAR server (logs even without browser)..."
 python3 "$PROJECT_DIR/lidar_server.py" \
@@ -81,16 +87,16 @@ python3 "$PROJECT_DIR/lidar_server.py" \
   --udp-port "$UDP_PORT" \
   --udp-format "$UDP_FORMAT" \
   --log "$LIDAR_LOG" \
-  >/dev/null 2>&1 &
+  >"$LIDAR_STDLOG" 2>&1 &
 LIDAR_PID=$!
 
 echo "Starting camera capture (V4L2)..."
 ffmpeg -hide_banner -loglevel warning -nostdin -y \
-  -f v4l2 -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
+  -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
   -use_wallclock_as_timestamps 1 \
   -c:v "$CAMERA_CODEC" -preset veryfast -crf "$CAMERA_CRF" \
   -f matroska "$VIDEO_OUT" \
-  >/dev/null 2>&1 &
+  >"$CAMERA_STDLOG" 2>&1 &
 CAMERA_PID=$!
 
 BEACON_PID=""
@@ -101,7 +107,7 @@ if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
   if [[ -n "$BEACON_NAME" ]]; then args+=(--name "$BEACON_NAME"); fi
   if [[ -n "$BEACON_UUID" ]]; then args+=(--ibeacon-uuid "$BEACON_UUID"); fi
   if [[ -n "$BEACON_ADAPTER" ]]; then args+=(--adapter "$BEACON_ADAPTER"); fi
-  python3 "$PROJECT_DIR/beacon_logger.py" "${args[@]}" >/dev/null 2>&1 &
+  python3 "$PROJECT_DIR/beacon_logger.py" "${args[@]}" >"$BEACON_STDLOG" 2>&1 &
   BEACON_PID=$!
 fi
 
@@ -161,7 +167,26 @@ PY
 trap cleanup INT TERM
 
 echo "Recording... press Ctrl+C to stop."
+echo "(If it exits immediately, check: $CAMERA_STDLOG and $BEACON_STDLOG)"
 echo
+
+# If a process dies right away, report which one.
+sleep 1
+if ! kill -0 "$LIDAR_PID" >/dev/null 2>&1; then
+  echo "LiDAR process exited early. See: $LIDAR_STDLOG"
+  cleanup
+  exit 1
+fi
+if ! kill -0 "$CAMERA_PID" >/dev/null 2>&1; then
+  echo "Camera process exited early. See: $CAMERA_STDLOG"
+  cleanup
+  exit 1
+fi
+if [[ -n "$BEACON_PID" ]] && ! kill -0 "$BEACON_PID" >/dev/null 2>&1; then
+  echo "Beacon process exited early. See: $BEACON_STDLOG"
+  cleanup
+  exit 1
+fi
 
 # Wait until one of the processes exits (or Ctrl+C).
 while kill -0 "$LIDAR_PID" >/dev/null 2>&1 && kill -0 "$CAMERA_PID" >/dev/null 2>&1; do
