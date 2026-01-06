@@ -67,17 +67,9 @@
   <div id="beaconPanel"></div>
 </div>
 
-<!-- Import map required for OrbitControls -->
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
-  }
-}
-</script>
-
 <script type="module">
-import * as THREE from 'three';
+// Use direct module URLs (more compatible than import maps).
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
 /* =====================================================
