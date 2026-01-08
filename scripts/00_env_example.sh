@@ -13,6 +13,10 @@ export WS_PORT="${WS_PORT:-8765}"
 # LiDAR UDP port (Unitree example / your LiDAR sender)
 export UDP_PORT="${UDP_PORT:-6201}"
 
+# Unitree priming (runs example_lidar_udp briefly before starting lidar_server.py)
+# Set to 0 to disable.
+export UNITREE_PRIME_SECONDS="${UNITREE_PRIME_SECONDS:-6}"
+
 # Camera device (USB camera capture node)
 export CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
 export CAMERA_SIZE="${CAMERA_SIZE:-1280x720}"

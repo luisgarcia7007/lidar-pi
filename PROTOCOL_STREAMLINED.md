@@ -61,6 +61,9 @@ source scripts/00_env.sh 2>/dev/null || true
 ./scripts/4_start_lidar_server.sh
 ```
 
+Note: `./scripts/4_start_lidar_server.sh` will automatically "prime" some Unitree LiDARs by running
+the SDK `example_lidar_udp` briefly first (configurable via `UNITREE_PRIME_SECONDS` in `scripts/00_env.sh`).
+
 Camera (VLC):
 
 ```bash
