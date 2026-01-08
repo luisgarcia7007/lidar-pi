@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Record a synchronized session:
 #  - LiDAR frames (JSONL) via lidar_server.py --log
-#  - Camera video (MKV) via ffmpeg (V4L2)
+#  - (Optional) Camera video (MKV) via ffmpeg (V4L2)
 #
 # Stop with Ctrl+C. A session meta JSON is written with start/stop timestamps.
 #
@@ -13,6 +13,7 @@ set -euo pipefail
 #   UDP_PORT=6201
 #   UDP_FORMAT=auto
 #   LOG_DIR=/home/pi/lidar_web/logs
+#   RECORD_CAMERA=0           # 0=don't record camera (lets VLC use it), 1=record camera
 #   CAMERA_DEV=/dev/video0
 #   CAMERA_SIZE=1920x1080
 #   CAMERA_FPS=5
@@ -41,6 +42,8 @@ UDP_FORMAT="${UDP_FORMAT:-auto}"
 
 LOG_DIR="${LOG_DIR:-$PROJECT_DIR/logs}"
 mkdir -p "$LOG_DIR"
+
+RECORD_CAMERA="${RECORD_CAMERA:-0}"
 
 CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
 CAMERA_SIZE="${CAMERA_SIZE:-1920x1080}"
@@ -72,7 +75,11 @@ PY
 
 echo "Session: $STAMP"
 echo "LiDAR log:  $LIDAR_LOG"
-echo "Video out:  $VIDEO_OUT"
+if [[ "$RECORD_CAMERA" == "1" ]]; then
+  echo "Video out:  $VIDEO_OUT"
+else
+  echo "Video out:  (disabled; set RECORD_CAMERA=1 to enable)"
+fi
 if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
   echo "Beacon out: $BEACON_OUT"
 fi
@@ -99,14 +106,19 @@ python3 "$PROJECT_DIR/lidar_server.py" \
   >"$LIDAR_STDLOG" 2>&1 &
 LIDAR_PID=$!
 
-echo "Starting camera capture (V4L2)..."
-ffmpeg -hide_banner -loglevel warning -nostdin -y \
-  -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
-  -use_wallclock_as_timestamps 1 \
-  -c:v "$CAMERA_CODEC" -preset veryfast -crf "$CAMERA_CRF" \
-  -f matroska "$VIDEO_OUT" \
-  >"$CAMERA_STDLOG" 2>&1 &
-CAMERA_PID=$!
+CAMERA_PID=""
+if [[ "$RECORD_CAMERA" == "1" ]]; then
+  echo "Starting camera capture (V4L2)..."
+  ffmpeg -hide_banner -loglevel warning -nostdin -y \
+    -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
+    -use_wallclock_as_timestamps 1 \
+    -c:v "$CAMERA_CODEC" -preset veryfast -crf "$CAMERA_CRF" \
+    -f matroska "$VIDEO_OUT" \
+    >"$CAMERA_STDLOG" 2>&1 &
+  CAMERA_PID=$!
+else
+  echo "Camera recording disabled (RECORD_CAMERA=0)."
+fi
 
 BEACON_PID=""
 if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
@@ -130,14 +142,18 @@ PY
 )"
 
   # Stop children
-  kill "$CAMERA_PID" >/dev/null 2>&1 || true
+  if [[ -n "$CAMERA_PID" ]]; then
+    kill "$CAMERA_PID" >/dev/null 2>&1 || true
+  fi
   kill "$LIDAR_PID" >/dev/null 2>&1 || true
   if [[ -n "$BEACON_PID" ]]; then
     kill "$BEACON_PID" >/dev/null 2>&1 || true
   fi
 
   # Wait a moment for flush
-  wait "$CAMERA_PID" >/dev/null 2>&1 || true
+  if [[ -n "$CAMERA_PID" ]]; then
+    wait "$CAMERA_PID" >/dev/null 2>&1 || true
+  fi
   wait "$LIDAR_PID" >/dev/null 2>&1 || true
   if [[ -n "$BEACON_PID" ]]; then
     wait "$BEACON_PID" >/dev/null 2>&1 || true
@@ -150,17 +166,18 @@ meta = {
   "start_unix_ns": int("$start_unix_ns"),
   "stop_unix_ns": int("$stop_unix_ns"),
   "lidar_log": "$LIDAR_LOG",
-  "video_out": "$VIDEO_OUT",
+  "video_out": "$VIDEO_OUT" if "$RECORD_CAMERA" == "1" else None,
   "beacon_out": "$BEACON_OUT" if (${#BEACON_PID} > 0) else None,
   "ws_port": int("$WS_PORT"),
   "udp_host": "$UDP_HOST",
   "udp_port": int("$UDP_PORT"),
   "udp_format": "$UDP_FORMAT",
-  "camera_dev": "$CAMERA_DEV",
-  "camera_size": "$CAMERA_SIZE",
-  "camera_fps": int("$CAMERA_FPS"),
-  "camera_codec": "$CAMERA_CODEC",
-  "camera_crf": int("$CAMERA_CRF"),
+  "record_camera": True if "$RECORD_CAMERA" == "1" else False,
+  "camera_dev": "$CAMERA_DEV" if "$RECORD_CAMERA" == "1" else None,
+  "camera_size": "$CAMERA_SIZE" if "$RECORD_CAMERA" == "1" else None,
+  "camera_fps": int("$CAMERA_FPS") if "$RECORD_CAMERA" == "1" else None,
+  "camera_codec": "$CAMERA_CODEC" if "$RECORD_CAMERA" == "1" else None,
+  "camera_crf": int("$CAMERA_CRF") if "$RECORD_CAMERA" == "1" else None,
   "beacon_mac": "$BEACON_MAC" or None,
   "beacon_name": "$BEACON_NAME" or None,
   "beacon_uuid": "$BEACON_UUID" or None,
@@ -176,7 +193,11 @@ PY
 trap cleanup INT TERM
 
 echo "Recording... press Ctrl+C to stop."
-echo "(If it exits immediately, check: $CAMERA_STDLOG and $BEACON_STDLOG)"
+if [[ "$RECORD_CAMERA" == "1" ]]; then
+  echo "(If it exits immediately, check: $CAMERA_STDLOG and $BEACON_STDLOG)"
+else
+  echo "(If it exits immediately, check: $LIDAR_STDLOG and $BEACON_STDLOG)"
+fi
 echo
 
 # If a process dies right away, report which one.
@@ -186,7 +207,7 @@ if ! kill -0 "$LIDAR_PID" >/dev/null 2>&1; then
   cleanup
   exit 1
 fi
-if ! kill -0 "$CAMERA_PID" >/dev/null 2>&1; then
+if [[ -n "$CAMERA_PID" ]] && ! kill -0 "$CAMERA_PID" >/dev/null 2>&1; then
   echo "Camera process exited early. See: $CAMERA_STDLOG"
   cleanup
   exit 1
@@ -198,7 +219,10 @@ if [[ -n "$BEACON_PID" ]] && ! kill -0 "$BEACON_PID" >/dev/null 2>&1; then
 fi
 
 # Wait until one of the processes exits (or Ctrl+C).
-while kill -0 "$LIDAR_PID" >/dev/null 2>&1 && kill -0 "$CAMERA_PID" >/dev/null 2>&1; do
+while kill -0 "$LIDAR_PID" >/dev/null 2>&1; do
+  if [[ -n "$CAMERA_PID" ]] && ! kill -0 "$CAMERA_PID" >/dev/null 2>&1; then
+    break
+  fi
   sleep 1
 done
 
