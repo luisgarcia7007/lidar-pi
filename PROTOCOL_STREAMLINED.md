@@ -43,6 +43,19 @@ Beacon:
 
 ### B) Live viewing (LiDAR in browser, video in VLC)
 
+#### One-command (tmux) option
+
+If you have `tmux` installed, you can start the web server + LiDAR WS server with one command:
+
+```bash
+cd ~/lidar_web
+./scripts/7_lidar_setup_tmux.sh
+```
+
+(Detach and leave running: `Ctrl+b`, then `d`. Re-attach: re-run the same command.)
+
+#### Manual option
+
 Terminal 1:
 
 ```bash
@@ -71,6 +84,12 @@ vlc "v4l2://${CAMERA_DEV:-/dev/video0}:chroma=MJPG:width=1280:height=720:fps=30"
 ```
 
 ### C) Recording a session (LiDAR + optional beacon + optional camera)
+
+#### Two-command (tmux) option
+
+1) Setup live (web + WS): `./scripts/7_lidar_setup_tmux.sh`
+2) Start recording: `./scripts/8_lidar_record_start_tmux.sh`
+3) Stop recording: `./scripts/9_lidar_record_stop_tmux.sh`
 
 Stop the live LiDAR server if it’s running (Ctrl+C in terminal 2), then:
 
