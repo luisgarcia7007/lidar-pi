@@ -17,11 +17,20 @@ export UDP_PORT="${UDP_PORT:-6201}"
 # Set to 0 to disable.
 export UNITREE_PRIME_SECONDS="${UNITREE_PRIME_SECONDS:-6}"
 
+# Auto-launch VLC camera preview when running scripts/7_lidar_setup_tmux.sh (only if DISPLAY is set)
+export START_VLC="${START_VLC:-1}"
+
 # Camera device (USB camera capture node)
 export CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
 export CAMERA_SIZE="${CAMERA_SIZE:-1280x720}"
 export CAMERA_FPS="${CAMERA_FPS:-30}"
 export CAMERA_INPUT_FORMAT="${CAMERA_INPUT_FORMAT:-mjpeg}"
+
+# Optional VLC overrides (otherwise derived from CAMERA_* above)
+# export VLC_CHROMA="MJPG"
+# export VLC_WIDTH=1280
+# export VLC_HEIGHT=720
+# export VLC_FPS=30
 
 # Beacon filter (pick ONE; leave others empty)
 export BEACON_MAC="${BEACON_MAC:-dd:88:00:00:0a:bf}"
