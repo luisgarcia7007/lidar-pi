@@ -12,6 +12,7 @@ set -euo pipefail
 #   SESSION=lidar  # tmux session name
 #   START_VLC=1    # auto-launch VLC if DISPLAY is set (default 1)
 #   RESTART=1      # restart web/ws commands even if session exists (default 1)
+#   OPEN_VIEWER=1  # auto-open viewer.html in browser if DISPLAY is set (default 1)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -20,6 +21,7 @@ SESSION="${SESSION:-lidar}"
 RESET="${RESET:-0}"
 START_VLC="${START_VLC:-1}"
 RESTART="${RESTART:-1}"
+OPEN_VIEWER="${OPEN_VIEWER:-1}"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not installed. Install: sudo apt-get install -y tmux"
@@ -49,6 +51,11 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
         ( source scripts/00_env.sh 2>/dev/null || true; "$ROOT/scripts/10_start_vlc_camera.sh" ) >/dev/null 2>&1 &
       fi
     fi
+
+    if [[ "$OPEN_VIEWER" == "1" && -n "${DISPLAY:-}" ]]; then
+      # Open (or focus) the viewer page for convenience.
+      ( source scripts/00_env.sh 2>/dev/null || true; "$ROOT/scripts/11_open_viewer.sh" ) >/dev/null 2>&1 || true
+    fi
   fi
   tmux attach -t "$SESSION"
   exit 0
@@ -66,6 +73,10 @@ if [[ "$START_VLC" == "1" && -n "${DISPLAY:-}" ]]; then
   if ! pgrep -x vlc >/dev/null 2>&1; then
     ( source scripts/00_env.sh 2>/dev/null || true; "$ROOT/scripts/10_start_vlc_camera.sh" ) >/dev/null 2>&1 &
   fi
+fi
+
+if [[ "$OPEN_VIEWER" == "1" && -n "${DISPLAY:-}" ]]; then
+  ( source scripts/00_env.sh 2>/dev/null || true; "$ROOT/scripts/11_open_viewer.sh" ) >/dev/null 2>&1 || true
 fi
 
 tmux select-window -t "$SESSION:web"

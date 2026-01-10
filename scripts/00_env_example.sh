@@ -20,6 +20,9 @@ export UNITREE_PRIME_SECONDS="${UNITREE_PRIME_SECONDS:-6}"
 # Auto-launch VLC camera preview when running scripts/7_lidar_setup_tmux.sh (only if DISPLAY is set)
 export START_VLC="${START_VLC:-1}"
 
+# Auto-open the viewer page in the desktop browser when running scripts/7_lidar_setup_tmux.sh
+export OPEN_VIEWER="${OPEN_VIEWER:-1}"
+
 # Camera device (USB camera capture node)
 export CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
 export CAMERA_SIZE="${CAMERA_SIZE:-1280x720}"
