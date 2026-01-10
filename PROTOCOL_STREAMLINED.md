@@ -54,6 +54,13 @@ cd ~/lidar_web
 
 (Detach and leave running: `Ctrl+b`, then `d`. Re-attach: re-run the same command.)
 
+Tip: if you ever suspect the session got "stale", restart the tmux commands with:
+
+```bash
+cd ~/lidar_web
+RESTART=1 ./scripts/7_lidar_setup_tmux.sh
+```
+
 #### Manual option
 
 Terminal 1:

@@ -9,7 +9,8 @@ set -euo pipefail
 #
 # Notes:
 # - This must run when the LiDAR UDP port is NOT already bound by another process.
-# - We intentionally ignore failures so normal workflows still run.
+# - We intentionally *tolerate* failures so normal workflows still run, but we
+#   now print a short warning when priming clearly didn't succeed.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -32,13 +33,37 @@ if ! command -v timeout >/dev/null 2>&1; then
 fi
 
 echo "Unitree prime: running example for ${UNITREE_PRIME_SECONDS}s..."
+tmp="${TMPDIR:-/tmp}/unitree_prime_${$}.log"
 set +e
-timeout "${UNITREE_PRIME_SECONDS}s" "$UNITREE_EXAMPLE" >/dev/null 2>&1
+timeout "${UNITREE_PRIME_SECONDS}s" "$UNITREE_EXAMPLE" >"$tmp" 2>&1
 rc=$?
 set -e
+
+ok=0
+if grep -q "A Cloud msg is parsed" "$tmp" 2>/dev/null; then
+  ok=1
+fi
+
+if [[ $ok -eq 1 ]]; then
+  echo "Unitree prime: OK (cloud parsed)"
+  rm -f "$tmp" >/dev/null 2>&1 || true
+  exit 0
+fi
 
 # timeout returns 124 when it kills the process (expected).
 if [[ $rc -ne 0 && $rc -ne 124 ]]; then
   echo "Unitree prime: example exited with code $rc (continuing anyway)"
 fi
+
+if grep -q "bind udp port failed" "$tmp" 2>/dev/null; then
+  echo "Unitree prime: WARNING - example couldn't bind UDP port (port already in use?)"
+elif grep -q "Unilidar initialization failed" "$tmp" 2>/dev/null; then
+  echo "Unitree prime: WARNING - example initialization failed"
+else
+  echo "Unitree prime: WARNING - no cloud parsed during prime window"
+fi
+
+echo "Unitree prime: last lines:"
+tail -n 6 "$tmp" 2>/dev/null || true
+rm -f "$tmp" >/dev/null 2>&1 || true
 
