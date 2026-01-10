@@ -35,7 +35,9 @@ fi
 echo "Unitree prime: running example for ${UNITREE_PRIME_SECONDS}s..."
 tmp="${TMPDIR:-/tmp}/unitree_prime_${$}.log"
 set +e
-timeout "${UNITREE_PRIME_SECONDS}s" "$UNITREE_EXAMPLE" >"$tmp" 2>&1
+# Use SIGINT (like Ctrl+C) instead of SIGTERM so behavior matches manual priming.
+# Some devices behave better with an INT-style stop.
+timeout --signal=INT --kill-after=2s "${UNITREE_PRIME_SECONDS}s" "$UNITREE_EXAMPLE" >"$tmp" 2>&1
 rc=$?
 set -e
 
