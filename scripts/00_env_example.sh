@@ -29,6 +29,10 @@ export CAMERA_SIZE="${CAMERA_SIZE:-1280x720}"
 export CAMERA_FPS="${CAMERA_FPS:-30}"
 export CAMERA_INPUT_FORMAT="${CAMERA_INPUT_FORMAT:-mjpeg}"
 
+# Camera stream (for viewing video on your laptop/phone over Wi‑Fi)
+export CAM_STREAM_PORT="${CAM_STREAM_PORT:-8080}"
+export CAM_STREAM_PATH="${CAM_STREAM_PATH:-/cam.mjpg}"
+
 # Optional VLC overrides (otherwise derived from CAMERA_* above)
 # export VLC_CHROMA="MJPG"
 # export VLC_WIDTH=1280
