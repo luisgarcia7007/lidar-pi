@@ -30,8 +30,16 @@ echo "Stop with Ctrl+C."
 echo
 
 # ffmpeg acts as an HTTP server with -listen 1 and serves multipart MJPEG.
-exec ffmpeg -hide_banner -loglevel warning -nostdin \
-  -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
-  -vf "scale=${CAMERA_SIZE}" \
-  -f mjpeg -q:v 5 -listen 1 -multiple_requests 1 "$URL"
+# Some clients (browsers/VLC) disconnect/reconnect, which can cause ffmpeg to exit with "Broken pipe".
+# Run in a small restart loop to keep the stream available in the field.
+while true; do
+  ffmpeg -hide_banner -loglevel warning -nostdin \
+    -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
+    -vf "scale=${CAMERA_SIZE}" \
+    -f mjpeg -q:v 5 -listen 1 -multiple_requests 1 "$URL"
+  rc=$?
+  echo
+  echo "Camera stream exited (code=$rc). Restarting in 1s..."
+  sleep 1
+done
 
