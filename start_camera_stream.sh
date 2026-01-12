@@ -36,7 +36,7 @@ while true; do
   ffmpeg -hide_banner -loglevel warning -nostdin \
     -f v4l2 -input_format "$CAMERA_INPUT_FORMAT" -framerate "$CAMERA_FPS" -video_size "$CAMERA_SIZE" -i "$CAMERA_DEV" \
     -vf "scale=${CAMERA_SIZE}" \
-    -f mjpeg -q:v 5 -listen 1 -multiple_requests 1 "$URL"
+    -f mpjpeg -q:v 5 -content_type multipart/x-mixed-replace -listen 1 -multiple_requests 1 "$URL"
   rc=$?
   echo
   echo "Camera stream exited (code=$rc). Restarting in 1s..."
