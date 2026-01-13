@@ -29,6 +29,12 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
+# Prefer pyenv python when available (tmux/non-interactive shells may not load it).
+PYTHON_BIN="python3"
+if [[ -x "$HOME/.pyenv/shims/python3" ]]; then
+  PYTHON_BIN="$HOME/.pyenv/shims/python3"
+fi
+
 # Load optional defaults (do not override environment variables).
 if [[ -f "$PROJECT_DIR/session_defaults.sh" ]]; then
   # shellcheck disable=SC1091
@@ -101,7 +107,7 @@ if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
   lidar_args+=(--beacon-log "$BEACON_OUT")
 fi
 
-python3 "$PROJECT_DIR/lidar_server.py" \
+"$PYTHON_BIN" "$PROJECT_DIR/lidar_server.py" \
   "${lidar_args[@]}" \
   >"$LIDAR_STDLOG" 2>&1 &
 LIDAR_PID=$!
@@ -128,7 +134,7 @@ if [[ -n "$BEACON_MAC" || -n "$BEACON_NAME" || -n "$BEACON_UUID" ]]; then
   if [[ -n "$BEACON_NAME" ]]; then args+=(--name "$BEACON_NAME"); fi
   if [[ -n "$BEACON_UUID" ]]; then args+=(--ibeacon-uuid "$BEACON_UUID"); fi
   if [[ -n "$BEACON_ADAPTER" ]]; then args+=(--adapter "$BEACON_ADAPTER"); fi
-  python3 "$PROJECT_DIR/beacon_logger.py" "${args[@]}" >"$BEACON_STDLOG" 2>&1 &
+  "$PYTHON_BIN" "$PROJECT_DIR/beacon_logger.py" "${args[@]}" >"$BEACON_STDLOG" 2>&1 &
   BEACON_PID=$!
 fi
 

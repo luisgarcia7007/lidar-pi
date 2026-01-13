@@ -14,11 +14,18 @@ if [[ "${UNITREE_PRIME_SECONDS:-6}" -gt 0 ]]; then
   "$ROOT/scripts/0_prime_unitree_lidar.sh" || true
 fi
 
+PYTHON_BIN="python3"
+# If the user uses pyenv, tmux/non-interactive shells may not load it.
+# Prefer the pyenv shim explicitly when present so dependencies match.
+if [[ -x "$HOME/.pyenv/shims/python3" ]]; then
+  PYTHON_BIN="$HOME/.pyenv/shims/python3"
+fi
+
 echo "Starting lidar_server.py (WS port $WS_PORT) reading UDP $UDP_HOST:$UDP_PORT (format=$UDP_FORMAT)"
 echo "Stop with Ctrl+C."
 echo
 
-exec python3 "$ROOT/lidar_server.py" \
+exec "$PYTHON_BIN" "$ROOT/lidar_server.py" \
   --ws-port "$WS_PORT" \
   --mode udp \
   --udp-host "$UDP_HOST" \
