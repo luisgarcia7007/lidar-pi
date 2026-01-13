@@ -33,6 +33,17 @@ cd "$ROOT"
 SESSION="${SESSION:-field}"
 RESET="${RESET:-1}"
 
+# Load env if present so we can print accurate URLs.
+if [[ -f "$ROOT/scripts/00_env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/00_env.sh"
+fi
+
+PI_IP="${LIDAR_WEB_HOST:-}"
+if [[ -z "$PI_IP" ]]; then
+  PI_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+fi
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not installed. Installing..."
   sudo apt-get update -y && sudo apt-get install -y tmux
@@ -63,7 +74,7 @@ echo
 echo "Attach: tmux attach -t $SESSION"
 echo "Stop all: tmux kill-session -t $SESSION"
 echo
-echo "From laptop (replace with your Pi IP):"
-echo "  Viewer: http://<pi-ip>:${WEB_PORT:-8000}/viewer.html"
-echo "  Camera: http://<pi-ip>:${CAM_STREAM_PORT:-8080}${CAM_STREAM_PATH:-/cam.mjpg}"
+echo "From laptop:"
+echo "  Viewer: http://${PI_IP}:${WEB_PORT:-8000}/viewer.html"
+echo "  Camera: http://${PI_IP}:${CAM_STREAM_PORT:-8080}${CAM_STREAM_PATH:-/cam.mjpg}"
 
