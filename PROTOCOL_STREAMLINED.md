@@ -21,6 +21,35 @@ chmod +x scripts/*.sh
 
 ## Recommended daily workflow (minimal typing)
 
+## Field workflow (minimal typing from laptop via SSH)
+
+If you are operating from a laptop and want the **fewest commands**:
+
+On the Pi (over SSH):
+
+```bash
+cd ~/lidar_web
+./scripts/13_field_setup.sh
+```
+
+Start recording:
+
+```bash
+cd ~/lidar_web
+./scripts/14_field_record_start.sh
+```
+
+Stop recording:
+
+```bash
+cd ~/lidar_web
+./scripts/15_field_record_stop.sh
+```
+
+Laptop URLs:
+- Viewer: `http://<pi-ip>:8000/viewer.html`
+- Camera: `http://<pi-ip>:8080/cam.mjpg` (view with `ffplay`/VLC)
+
 ### A) Quick hardware checks (optional but recommended)
 
 Load your env (if you created it):

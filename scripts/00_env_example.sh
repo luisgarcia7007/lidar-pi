@@ -24,14 +24,17 @@ export START_VLC="${START_VLC:-1}"
 export OPEN_VIEWER="${OPEN_VIEWER:-1}"
 
 # Camera device (USB camera capture node)
-export CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
-export CAMERA_SIZE="${CAMERA_SIZE:-1280x720}"
-export CAMERA_FPS="${CAMERA_FPS:-30}"
+export CAMERA_DEV="${CAMERA_DEV:-/dev/video1}"
+export CAMERA_SIZE="${CAMERA_SIZE:-424x240}"
+export CAMERA_FPS="${CAMERA_FPS:-10}"
 export CAMERA_INPUT_FORMAT="${CAMERA_INPUT_FORMAT:-mjpeg}"
 
 # Camera stream (for viewing video on your laptop/phone over Wi‑Fi)
 export CAM_STREAM_PORT="${CAM_STREAM_PORT:-8080}"
 export CAM_STREAM_PATH="${CAM_STREAM_PATH:-/cam.mjpg}"
+
+# Recording: keep camera off by default for field driving (VLC/ffplay uses the stream)
+export RECORD_CAMERA="${RECORD_CAMERA:-0}"
 
 # Optional VLC overrides (otherwise derived from CAMERA_* above)
 # export VLC_CHROMA="MJPG"
