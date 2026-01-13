@@ -325,15 +325,41 @@ function updateHud() {
     `Mode: ${RENDER_MODE} (v to toggle)\n` +
     `Voxel: ${VOXEL_SIZE.toFixed(3)} m  Point: ${POINT_SIZE.toFixed(2)} px\n` +
     `Window: ${(WINDOW_MS/1000).toFixed(0)} s\n` +
-    `Keys: [ / ] point size, { / } voxel size, v toggle mode\n` +
+    `Keys: [ / ] point size, { / } voxel size, v toggle mode, r reset\n` +
     `Space: pause (${PAUSED ? 'ON' : 'OFF'})  (click scene for keys)`;
 }
 updateHud();
+
+function resetAccumulation() {
+  // Clear voxel accumulation state
+  voxelMap.clear();
+  voxelIntensitySum.clear();
+  voxelHeightSum.clear();
+  voxelRangeSum.clear();
+  bucketMaps.clear();
+  bucketOrder.length = 0;
+  bucketIntensityMaps.clear();
+  bucketHeightMaps.clear();
+  bucketRangeMaps.clear();
+
+  // Clear rendered buffers for both modes
+  rawGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+  rawGeometry.setAttribute('color', new THREE.Float32BufferAttribute([], 3));
+  rawGeometry.computeBoundingSphere();
+
+  voxelGeometry.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+  voxelGeometry.setAttribute('color', new THREE.Float32BufferAttribute([], 3));
+  voxelGeometry.computeBoundingSphere();
+
+  lastRenderMs = 0;
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.key === '1') COLOR_MODE = 'height';
   else if (e.key === '2') COLOR_MODE = 'range';
   else if (e.key === '3') COLOR_MODE = 'intensity';
   else if (e.key === 'v' || e.key === 'V') RENDER_MODE = (RENDER_MODE === 'raw') ? 'voxel' : 'raw';
+  else if (e.key === 'r' || e.key === 'R') resetAccumulation();
   else if (e.key === ' ') PAUSED = !PAUSED;
   // Point size controls (more intuitive for users)
   else if (e.key === '[') {
