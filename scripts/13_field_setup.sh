@@ -49,6 +49,9 @@ if ! command -v tmux >/dev/null 2>&1; then
   sudo apt-get update -y && sudo apt-get install -y tmux
 fi
 
+# Ensure the tmux server is running (avoids "No such file or directory" socket errors).
+tmux start-server >/dev/null 2>&1 || true
+
 if [[ "$RESET" == "1" ]]; then
   tmux kill-session -t "$SESSION" >/dev/null 2>&1 || true
 fi
