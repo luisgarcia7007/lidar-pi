@@ -64,13 +64,13 @@ if ! tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 
 tmux send-keys -t "$SESSION:web" C-c
-tmux send-keys -t "$SESSION:web" 'source scripts/00_env.sh 2>/dev/null || true; ./scripts/3_start_web_server.sh' C-m
+tmux send-keys -t "$SESSION:web" 'bash -lc "source scripts/00_env.sh 2>/dev/null || true; ./scripts/3_start_web_server.sh"' C-m
 
 tmux send-keys -t "$SESSION:ws" C-c
-tmux send-keys -t "$SESSION:ws" 'source scripts/00_env.sh 2>/dev/null || true; ./scripts/4_start_lidar_server.sh' C-m
+tmux send-keys -t "$SESSION:ws" 'bash -lc "source scripts/00_env.sh 2>/dev/null || true; ./scripts/4_start_lidar_server.sh"' C-m
 
 tmux send-keys -t "$SESSION:cam" C-c
-tmux send-keys -t "$SESSION:cam" 'source scripts/00_env.sh 2>/dev/null || true; ./scripts/12_start_camera_stream.sh' C-m
+tmux send-keys -t "$SESSION:cam" 'bash -lc "unset CAMERA_DEV CAMERA_SIZE CAMERA_FPS CAMERA_INPUT_FORMAT CAM_STREAM_PORT CAM_STREAM_PATH STREAM_PORT STREAM_PATH; source scripts/00_env.sh 2>/dev/null || true; ./scripts/12_start_camera_stream.sh"' C-m
 
 echo "Field setup started in tmux session: $SESSION"
 echo

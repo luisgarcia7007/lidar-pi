@@ -20,5 +20,23 @@ CAM_STREAM_PATH="${CAM_STREAM_PATH:-/cam.mjpg}"
 export STREAM_PORT="$CAM_STREAM_PORT"
 export STREAM_PATH="$CAM_STREAM_PATH"
 
+# Forward camera settings explicitly (avoids stale tmux env / default fallback).
+export CAMERA_DEV="${CAMERA_DEV:-/dev/video0}"
+export CAMERA_SIZE="${CAMERA_SIZE:-320x180}"
+export CAMERA_FPS="${CAMERA_FPS:-10}"
+export CAMERA_INPUT_FORMAT="${CAMERA_INPUT_FORMAT:-mjpeg}"
+
+# If the preferred device node doesn't exist (USB cameras can re-enumerate),
+# fall back to the first available /dev/video{0..9}.
+if [[ ! -e "$CAMERA_DEV" ]]; then
+  for d in /dev/video{0..9}; do
+    if [[ -e "$d" ]]; then
+      echo "Camera device '$CAMERA_DEV' not found; falling back to '$d'"
+      export CAMERA_DEV="$d"
+      break
+    fi
+  done
+fi
+
 exec "$ROOT/start_camera_stream.sh"
 
